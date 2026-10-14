@@ -15,7 +15,7 @@ import com.guanyji.app.core.designsystem.EmptyState
 import com.guanyji.app.core.designsystem.PageTitle
 
 @Composable
-fun PageShell(destination: AppDestination) {
+fun PageShell(destination: AppDestination, onQuickFeeding: (() -> Unit)? = null) {
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = { PageTitle(destination.title) },
@@ -32,6 +32,7 @@ fun PageShell(destination: AppDestination) {
                 title = if (destination == AppDestination.Overview) "还没有养护记录" else destination.title,
                 message = destination.description,
             )
+            if (destination == AppDestination.Overview) androidx.compose.material3.Button(onClick = { onQuickFeeding?.invoke() }) { androidx.compose.material3.Text("快速喂食") }
         }
     }
 }
