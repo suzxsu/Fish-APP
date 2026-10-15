@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -77,11 +78,12 @@ private val statuses = listOf(null to "全部", FishStatus.active to "在养", F
 @Composable
 fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (String) -> Unit, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
     val data by vm.fish.collectAsStateWithLifecycle()
-    val tanks by vm.tanks.collectAsStateWithLifecycle()
-    var search by remember { mutableStateOf("") }
-    var tankId by remember { mutableStateOf<String?>(null) }
-    var status by remember { mutableStateOf<FishStatus?>(null) }
-    var sort by remember { mutableStateOf(FishSort.added) }
+    val tankData by vm.tanks.collectAsStateWithLifecycle()
+    val tanks = tankData.orEmpty()
+    var search by rememberSaveable { mutableStateOf("") }
+    var tankId by rememberSaveable { mutableStateOf<String?>(null) }
+    var status by rememberSaveable { mutableStateOf<FishStatus?>(null) }
+    var sort by rememberSaveable { mutableStateOf(FishSort.added) }
     var tankMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     // 只做一次入场动画的鱼只，避免滚动回收后重复播放。
@@ -96,12 +98,13 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
         FishSort.measured -> rows.sortedByDescending { it.lastMeasuredAt ?: Long.MIN_VALUE }
     } }
     val activeCount = data?.count { it.fish.status == FishStatus.active || it.fish.status == FishStatus.quarantine }
-    Scaffold(containerColor = DashboardTokens.PageBackground) { padding ->
+    Scaffold(containerColor = DashboardTokens.PageBackground, contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            FishListHeader(activeCount = activeCount, onAdd = onCreate)
+            Box(Modifier.testTag("fish-list-screen")) { FishListHeader(activeCount = activeCount, onAdd = onCreate) }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 148.dp),
                 modifier = Modifier.fillMaxWidth().weight(1f),
+                state = androidx.compose.foundation.lazy.grid.rememberLazyGridState(),
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
                 verticalArrangement = Arrangement.spacedBy(11.dp),
@@ -170,7 +173,8 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
 /** 页面顶部水族海报：背景使用设计稿提供的珊瑚礁小丑鱼图，文字只展示真实计数。 */
 @Composable
 private fun FishListHeader(activeCount: Int?, onAdd: () -> Unit) {
-    Box(Modifier.fillMaxWidth().heightIn(min = 152.dp)) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(Modifier.fillMaxWidth().heightIn(min = 152.dp + statusBarInset)) {
         SubcomposeAsyncImage(
             model = ImageRequest.Builder(LocalContext.current).data(R.drawable.dashboard_header_reef).crossfade(320).build(),
             contentDescription = "水族主题背景：珊瑚礁中的小丑鱼",
@@ -192,7 +196,7 @@ private fun FishListHeader(activeCount: Int?, onAdd: () -> Unit) {
             ),
         )
         Column(
-            Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 18.dp, bottom = 12.dp),
+            Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = statusBarInset + 18.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -246,9 +250,10 @@ private fun FishListHeaderFallback() {
 }
 
 @Composable
-fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Unit, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
+fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Unit, initialTankId: String? = null, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
     val allFish by vm.fish.collectAsStateWithLifecycle()
     val tanks by vm.tanks.collectAsStateWithLifecycle()
+    val availableTanks = tanks.orEmpty()
     val existing = allFish?.firstOrNull { it.fish.id == fishId }?.fish
     val photoVm: PhotoViewModel = viewModel(key = "fish-photo-$fishId", factory = PhotoViewModelFactory(vm.photoRepository))
     var initialized by remember(fishId) { mutableStateOf(false) }
@@ -256,15 +261,21 @@ fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
     var addedAt by remember { mutableLongStateOf(todayStart()) }; var birthDate by remember { mutableStateOf<Long?>(null) }
     var length by remember { mutableStateOf("") }; var weight by remember { mutableStateOf("") }; var sex by remember { mutableStateOf("") }
     var source by remember { mutableStateOf("") }; var notes by remember { mutableStateOf("") }; var busy by remember { mutableStateOf(false) }; var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(existing?.id, tanks.size) {
+    LaunchedEffect(existing?.id, tanks, initialTankId) {
         if (fishId != null && existing != null && !initialized) {
             name = existing.name; species = existing.species.orEmpty(); tankId = existing.tankId; addedAt = existing.addedAt; birthDate = existing.birthDate
             sex = existing.sex.orEmpty(); source = existing.source.orEmpty(); notes = existing.notes.orEmpty()
             photoVm.load(existing.coverPhotoId); initialized = true
-        } else if (fishId == null && tankId.isBlank()) tankId = tanks.firstOrNull { it.status == TankStatus.active }?.id.orEmpty()
+        } else if (fishId == null && tanks != null && !initialized) {
+            val requestedTank = availableTanks.firstOrNull { it.id == initialTankId && it.status == TankStatus.active }
+            tankId = requestedTank?.id ?: availableTanks.firstOrNull { it.status == TankStatus.active }?.id.orEmpty()
+            initialized = true
+        } else if (fishId != null && allFish != null && existing == null) {
+            initialized = true
+        }
     }
     val photoState by photoVm.state.collectAsStateWithLifecycle()
-    val tank = tanks.firstOrNull { it.id == tankId }
+    val tank = availableTanks.firstOrNull { it.id == tankId }
     val hasUnsavedChanges = photoState.isBusy || if (fishId == null) {
         name.isNotBlank() || species.isNotBlank() || length.isNotBlank() || weight.isNotBlank() || sex.isNotBlank() || source.isNotBlank() || notes.isNotBlank() || photoState.photo != null
     } else initialized && existing != null && (
@@ -293,13 +304,17 @@ fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
             }
         },
     ) { padding ->
-        if (fishId != null && existing == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼只档案") }
+        if (fishId != null && allFish == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼只档案") }
+        else if (fishId != null && existing == null) Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("找不到这条鱼", modifier = Modifier.testTag("fish-edit-not-found"), style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = onBack) { Text("返回") }
+        }
         else Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             PhotoPickerField(photoVm)
             OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("鱼名 *") }, singleLine = true)
             OutlinedTextField(species, { species = it }, Modifier.fillMaxWidth(), label = { Text("鱼种（可选）") }, singleLine = true)
             var tankMenu by remember { mutableStateOf(false) }
-            Box { OutlinedButton(onClick = { tankMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("所属鱼缸 *：${tank?.name ?: "选择鱼缸"} · ${tank?.type?.let { if (it == TankType.freshwater) "淡水" else "海水" }.orEmpty()}") }; DropdownMenu(tankMenu, { tankMenu = false }) { tanks.filter { it.status == TankStatus.active }.forEach { t -> DropdownMenuItem(text = { Text("${t.name} · ${if (t.type == TankType.freshwater) "淡水" else "海水"}") }, onClick = { tankId = t.id; tankMenu = false }) } } }
+            Box { OutlinedButton(onClick = { tankMenu = true }, modifier = Modifier.fillMaxWidth()) { Text("所属鱼缸 *：${tank?.name ?: "选择鱼缸"} · ${tank?.type?.let { if (it == TankType.freshwater) "淡水" else "海水" }.orEmpty()}") }; DropdownMenu(tankMenu, { tankMenu = false }) { availableTanks.filter { it.status == TankStatus.active }.forEach { t -> DropdownMenuItem(text = { Text("${t.name} · ${if (t.type == TankType.freshwater) "淡水" else "海水"}") }, onClick = { tankId = t.id; tankMenu = false }) } } }
             DateField("入缸日期 *", addedAt) { it?.let { value -> addedAt = value } }
             DateField("出生日期（可选）", birthDate, true) { birthDate = it }
             OutlinedTextField(length, { length = it }, Modifier.fillMaxWidth(), label = { Text(if (fishId == null) "初始体长（cm，可选）" else "初始体长仅首次建档时填写") }, singleLine = true, enabled = fishId == null)
@@ -322,14 +337,16 @@ fun FishDetailScreen(
     onOpenTank: (String) -> Unit = {},
     vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application)),
 ) {
-    val summary by remember(fishId) { vm.summary(fishId) }.collectAsStateWithLifecycle()
+    val detailState by remember(fishId) { vm.detailState(fishId) }.collectAsStateWithLifecycle()
+    val summary = (detailState as? FishLoadState.Success)?.value
     val tanks by vm.tanks.collectAsStateWithLifecycle()
+    val availableTanks = tanks.orEmpty()
     val events by remember(fishId) { vm.events(fishId) }.collectAsStateWithLifecycle()
     val growth by remember(fishId) { vm.growth(fishId) }.collectAsStateWithLifecycle()
     val latestLength by remember(fishId) { vm.latestLength(fishId) }.collectAsStateWithLifecycle()
     val latestWeight by remember(fishId) { vm.latestWeight(fishId) }.collectAsStateWithLifecycle()
     val fish = summary?.fish
-    val tank = tanks.firstOrNull { it.id == fish?.tankId }
+    val tank = availableTanks?.firstOrNull { it.id == fish?.tankId }
     val photo by remember(fish?.coverPhotoId) { vm.photo(fish?.coverPhotoId) }.collectAsStateWithLifecycle()
     val tankPhoto by remember(tank?.photoId) { vm.photo(tank?.photoId) }.collectAsStateWithLifecycle()
     // 水质只展示该鱼缸最近一次真实检测结果，没有记录时保持“尚无测量数据”。
@@ -350,6 +367,7 @@ fun FishDetailScreen(
 
     Scaffold(
         containerColor = DashboardTokens.PageBackground,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         bottomBar = {
             if (fish != null) FishDetailActionBar(
                 busy = busy,
@@ -362,10 +380,21 @@ fun FishDetailScreen(
             )
         },
     ) { padding ->
-        if (summary == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼只档案") }
-        else Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+        when (val state = detailState) {
+        FishLoadState.Loading -> Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼只档案") }
+        FishLoadState.NotFound -> Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("找不到这条鱼", modifier = Modifier.testTag("fish-not-found"), style = MaterialTheme.typography.titleLarge)
+            Text("鱼只可能已被删除或链接已失效。")
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+        is FishLoadState.Error -> Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("鱼只加载失败", modifier = Modifier.testTag("fish-detail-error"), style = MaterialTheme.typography.titleLarge)
+            Text(state.message)
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+        is FishLoadState.Success -> if (fish != null) Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
             FishDetailHero(
-                fish = fish!!,
+                fish = fish,
                 tankType = tank?.type,
                 photo = photo,
                 durationDays = durationDays(fish.addedAt, fish.deathDate, fish.status == FishStatus.deceased),
@@ -427,7 +456,7 @@ fun FishDetailScreen(
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             events.take(2).forEach { event ->
                                 Text(
-                                    "${formatDate(event.occurredAt)} · ${fishEventLabel(event, tanks)}${if (!event.dateKnown) "（日期未知）" else ""}",
+                                    "${formatDate(event.occurredAt)} · ${fishEventLabel(event, availableTanks.orEmpty())}${if (!event.dateKnown) "（日期未知）" else ""}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface,
                                 )
@@ -443,13 +472,14 @@ fun FishDetailScreen(
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             }
         }
+        }
     }
 
     if (action == FishStatus.deceased) AlertDialog(onDismissRequest = { action = null }, title = { Text("标记为已故") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("请确认发生日期；日期不详时可明确记录为未知。") ; DateField("发生日期", date) { it?.let { v -> date = v } }; Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(unknownDeath, { unknownDeath = it }); Text("日期不详") } } }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, FishStatus.deceased, if (unknownDeath) null else date, !unknownDeath, { busy = false; action = null }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     else if (action == FishStatus.transferred) AlertDialog(onDismissRequest = { action = null }, title = { Text("标记已转出") }, text = { DateField("转出日期", date) { it?.let { v -> date = v } } }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, FishStatus.transferred, date, true, { busy = false; action = null }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认转出") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     else if (action == FishStatus.active || action == FishStatus.quarantine) AlertDialog(onDismissRequest = { action = null }, title = { Text("更改鱼只状态") }, text = { Text("${fish?.name}将标记为${action!!.label()}。") }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, action!!, System.currentTimeMillis(), onSaved = { busy = false; action = null }, onError = { busy = false; error = it }) }) { Text("确认") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     if (showArchive) ConfirmDialog("归档鱼只？", "归档后停止该鱼只的未来任务，档案与历史记录仍可查询。", "归档", onConfirm = { busy = true; vm.archive(fishId, { busy = false; showArchive = false; onBack() }, { busy = false; error = it }); showArchive = false }, onDismiss = { showArchive = false })
-    if (showMove) AlertDialog(onDismissRequest = { showMove = false }, title = { Text("转缸") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { var menu by remember { mutableStateOf(false) }; Box { OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text("目标鱼缸：${tanks.firstOrNull { it.id == targetTankId }?.name ?: "选择鱼缸"}") }; DropdownMenu(menu, { menu = false }) { tanks.filter { it.status == TankStatus.active && it.id != fish?.tankId }.forEach { t -> DropdownMenuItem(text = { Text(t.name) }, onClick = { targetTankId = t.id; menu = false }) } } }; DateField("转缸日期", date) { it?.let { value -> date = value } } } }, confirmButton = { TextButton(enabled = !busy && targetTankId.isNotBlank(), onClick = { busy = true; vm.move(fishId, targetTankId, date, { busy = false; showMove = false }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认转缸") } }, dismissButton = { TextButton(onClick = { showMove = false }) { Text("取消") } })
+    if (showMove) AlertDialog(onDismissRequest = { showMove = false }, title = { Text("转缸") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { var menu by remember { mutableStateOf(false) }; Box { OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text("目标鱼缸：${availableTanks.firstOrNull { it.id == targetTankId }?.name ?: "选择鱼缸"}") }; DropdownMenu(menu, { menu = false }) { availableTanks.filter { it.status == TankStatus.active && it.id != fish?.tankId }.forEach { t -> DropdownMenuItem(text = { Text(t.name) }, onClick = { targetTankId = t.id; menu = false }) } } }; DateField("转缸日期", date) { it?.let { value -> date = value } } } }, confirmButton = { TextButton(enabled = !busy && targetTankId.isNotBlank(), onClick = { busy = true; vm.move(fishId, targetTankId, date, { busy = false; showMove = false }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认转缸") } }, dismissButton = { TextButton(onClick = { showMove = false }) { Text("取消") } })
 }
 
 /* ---------------------------- 详情页：水族头部 ---------------------------- */
@@ -471,7 +501,8 @@ private fun FishDetailHero(
     onArchive: () -> Unit,
 ) {
     val palette = remember(fish.status) { fish.status.cardPalette() }
-    Box(Modifier.fillMaxWidth().heightIn(min = 320.dp)) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(Modifier.fillMaxWidth().heightIn(min = 320.dp + statusBarInset)) {
         if (photo == null) FishDetailPhotoFallback()
         else ManagedPhotoImage(photo, thumbnail = false, modifier = Modifier.matchParentSize())
         // 上暗保证返回 / 更多按钮可读，下暗让身份卡与照片自然过渡。
@@ -486,7 +517,7 @@ private fun FishDetailHero(
             ),
         )
         Row(
-            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().padding(start = 8.dp, end = 8.dp, top = statusBarInset + 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             FishHeroIconButton(icon = Icons.AutoMirrored.Outlined.ArrowBack, description = "返回", onClick = onBack)
@@ -866,25 +897,36 @@ private fun fishEventLabel(event: FishEvent, tanks: List<Tank>): String = when (
 
 @Composable
 fun FishRecordsScreen(fishId: String, section: String, onBack: () -> Unit, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
-    val fishData by vm.fish.collectAsStateWithLifecycle()
-    val events by remember(fishId) { vm.events(fishId) }.collectAsStateWithLifecycle()
-    val growth by remember(fishId) { vm.growth(fishId) }.collectAsStateWithLifecycle()
-    val fish = fishData?.firstOrNull { it.fish.id == fishId }?.fish
-    val feedings by remember(fishId, fish?.tankId) { fish?.let { vm.feedings(fishId, it.tankId) } ?: kotlinx.coroutines.flow.flowOf(emptyList<FeedingEvent>()) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val state by remember(fishId) { vm.recordsState(fishId) }.collectAsStateWithLifecycle()
+    val fishName = (state as? FishRecordsState.Success)?.fish?.name ?: "鱼只"
     val title = when (section) { "growth" -> "成长记录"; "feeding" -> "喂食记录"; else -> "鱼只时间线" }
-    Scaffold(topBar = { FishTopBar("${fish?.name ?: "鱼只"} · $title", onBack) }) { padding ->
+    Scaffold(topBar = { FishTopBar("$fishName · $title", onBack) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            when (section) {
+            Text("$fishName · $title", modifier = Modifier.testTag("fish-records-title"), style = MaterialTheme.typography.titleMedium)
+            when (val recordsState = state) {
+                FishRecordsState.Loading -> LoadingState("正在加载鱼只记录")
+                FishRecordsState.NotFound -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("找不到这条鱼", modifier = Modifier.testTag("fish-not-found"))
+                    Text("鱼只可能已被删除或链接已失效。")
+                    TextButton(onClick = onBack) { Text("返回") }
+                }
+                is FishRecordsState.Error -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("鱼只记录加载失败", modifier = Modifier.testTag("fish-records-error"))
+                    Text(recordsState.message)
+                    TextButton(onClick = onBack) { Text("返回") }
+                }
+                is FishRecordsState.Success -> when (section) {
                 "growth" -> {
-                    GrowthHistoryContent(fishId, growth, vm)
+                    GrowthHistoryContent(fishId, recordsState.growth, vm)
                 }
                 "feeding" -> {
-                    if (feedings.isEmpty()) EmptyState("暂无喂食记录", "指定鱼只和所属鱼缸的喂食事件会显示在这里。")
-                    feedings.forEach { record -> InfoCard(formatDateTime(record.fedAt), { Text("${record.foodType ?: "饲料未记录"} · ${record.amountValue?.let { "${it.pretty()} ${record.amountUnit.orEmpty()}" } ?: "投喂量未记录"}"); record.result?.let { Text("摄食情况：$it") }; record.notes?.let { Text(it) } }) }
+                    if (recordsState.feedings.isEmpty()) EmptyState("暂无喂食记录", "指定鱼只和所属鱼缸的喂食事件会显示在这里。")
+                    recordsState.feedings.forEach { record -> InfoCard(formatDateTime(record.fedAt), { Text("${record.foodType ?: "饲料未记录"} · ${record.amountValue?.let { "${it.pretty()} ${record.amountUnit.orEmpty()}" } ?: "投喂量未记录"}"); record.result?.let { Text("摄食情况：$it") }; record.notes?.let { Text(it) } }) }
                 }
                 else -> {
-                    if (events.isEmpty()) EmptyState("暂无历史事件", "鱼只状态和转缸操作会记录在这里。")
-                    events.forEach { event -> InfoCard(formatDate(event.occurredAt), { Text(when (event.type) { FishEventType.created -> "建立档案"; FishEventType.moved -> "转缸记录"; FishEventType.statusChanged -> event.status?.label() ?: "状态变更"; FishEventType.archived -> "归档"}); if (!event.dateKnown) Text("发生日期未知") }) }
+                    if (recordsState.events.isEmpty()) EmptyState("暂无历史事件", "鱼只状态和转缸操作会记录在这里。")
+                    recordsState.events.forEach { event -> InfoCard(formatDate(event.occurredAt), { Text(when (event.type) { FishEventType.created -> "建立档案"; FishEventType.moved -> "转缸记录"; FishEventType.statusChanged -> event.status?.label() ?: "状态变更"; FishEventType.archived -> "归档"}); if (!event.dateKnown) Text("发生日期未知") }) }
+                }
                 }
             }
         }

@@ -16,6 +16,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -41,7 +42,9 @@ fun StatisticsScreen(onBack: () -> Unit, onAddRecord: (String, String?) -> Unit,
     var tankMenu by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<TrendPoint?>(null) }
     Column(Modifier.fillMaxSize()) {
-        PageTitle("统计报表", "根据本地已保存记录汇总", onBack)
+        androidx.compose.foundation.layout.Box(Modifier.testTag("statistics-screen")) {
+            PageTitle("统计报表", "根据本地已保存记录汇总", onBack)
+        }
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 OutlinedButton(onClick = { tankMenu = true }) { Text(tanks.firstOrNull { it.id == filter.tankId }?.name ?: "全部鱼缸") }

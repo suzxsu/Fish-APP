@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -54,9 +55,9 @@ fun ProfileScreen(
     val stats by vm.overview.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, containerColor = Color(0xFFF1F8FC)) { padding ->
+    Scaffold(snackbarHost = { SnackbarHost(snackbar) }, containerColor = Color(0xFFF1F8FC), contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()),
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).testTag("profile-screen"),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             ProfileHeader(onEdit = { scope.launch { snackbar.showSnackbar("资料编辑暂不可用") } })
@@ -76,10 +77,11 @@ fun ProfileScreen(
 
 @Composable
 private fun ProfileHeader(onEdit: () -> Unit) {
-    Box(Modifier.fillMaxWidth().height(222.dp)) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(Modifier.fillMaxWidth().height(222.dp + statusBarInset)) {
         Image(painter = androidx.compose.ui.res.painterResource(R.drawable.care_header), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x55052D50), Color(0xC6074773)))))
-        Row(Modifier.align(Alignment.CenterStart).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(Modifier.align(Alignment.CenterStart).offset(y = statusBarInset / 2).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Box(Modifier.size(78.dp).clip(CircleShape).background(Color.White.copy(alpha = .2f)).border(2.dp, Color.White, CircleShape).clickable(onClick = onEdit).semantics { contentDescription = "编辑个人资料" }, contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.Person, null, Modifier.size(46.dp), tint = Color.White)
             }

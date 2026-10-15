@@ -75,6 +75,7 @@ fun ConfirmDialog(
     message: String,
     confirmText: String = "确认",
     dismissText: String = "取消",
+    confirmEnabled: Boolean = true,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -82,7 +83,7 @@ fun ConfirmDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Text(message) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = { TextButton(enabled = confirmEnabled, onClick = onConfirm) { Text(confirmText) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(dismissText) } },
     )
 }

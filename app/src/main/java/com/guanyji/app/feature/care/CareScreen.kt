@@ -38,6 +38,7 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.sp
@@ -63,13 +64,16 @@ private val CareCanvas = Color(0xFFF1F8FC)
 private val CareLine = Color(0xFFDDECF5)
 
 @Composable
-fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: CareViewModel = viewModel(factory = CareViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
+fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, initialView: String? = null, vm: CareViewModel = viewModel(factory = CareViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
     val context = LocalContext.current
     val tasks by vm.tasks.collectAsStateWithLifecycle()
     val records by vm.records.collectAsStateWithLifecycle()
     val tanks by vm.tanks.collectAsStateWithLifecycle()
     val fish by vm.fish.collectAsStateWithLifecycle()
-    var view by rememberSaveable { mutableStateOf(CareView.today) }
+    var view by rememberSaveable { mutableStateOf(if (initialView == "history") CareView.history else CareView.today) }
+    LaunchedEffect(initialView) {
+        if (initialView == "history") view = CareView.history
+    }
     var showEditor by remember { mutableStateOf(false) }
     var selectedDay by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
     var shownMonth by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
@@ -99,7 +103,7 @@ fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: Ca
     val todayTasks = tasks.filter { it.status in setOf(CareTaskStatus.pending, CareTaskStatus.overdue) && (it.plannedAt in todayStart until todayEnd || it.status == CareTaskStatus.overdue) }.sortedBy { it.plannedAt }
     val futureTasks = tasks.filter { it.plannedAt >= todayEnd && it.status == CareTaskStatus.pending }.sortedBy { it.plannedAt }
     val visibleRecords = records.filter { historyType == null || it.type == historyType }.sortedByDescending { it.completedAt }
-    Scaffold(containerColor = CareCanvas, floatingActionButton = { FloatingActionButton(onClick = { editing = null; showEditor = true }, containerColor = CareBlue, contentColor = Color.White) { Icon(Icons.Outlined.Add, contentDescription = "新增养护任务") } }) { padding ->
+    Scaffold(containerColor = CareCanvas, contentWindowInsets = WindowInsets(0, 0, 0, 0), floatingActionButton = { FloatingActionButton(onClick = { editing = null; showEditor = true }, containerColor = CareBlue, contentColor = Color.White) { Icon(Icons.Outlined.Add, contentDescription = "新增养护任务") } }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             CareHeader()
             CareTabRow(view, onSelect = { view = it })
@@ -172,7 +176,8 @@ fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: Ca
 
 @Composable
 private fun CareHeader() {
-    Box(Modifier.fillMaxWidth().height(172.dp)) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(Modifier.fillMaxWidth().height(172.dp + statusBarInset)) {
         androidx.compose.foundation.Image(painterResource(com.guanyji.app.R.drawable.care_header), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.Center)
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x33102C45), Color(0xB3123854)))))
         Column(Modifier.align(Alignment.BottomStart).padding(start = 22.dp, bottom = 22.dp)) {
@@ -200,7 +205,7 @@ private fun CareSectionHeading(title: String, subtitle: String, icon: androidx.c
     Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Icon(icon, null, tint = CareBlue, modifier = Modifier.size(22.dp))
         Spacer(Modifier.width(9.dp))
-        Text(title, color = CareInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(title, color = CareInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f).then(if (title == "养护记录") Modifier.testTag("care-history-title") else Modifier), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(subtitle, color = CareMuted, style = MaterialTheme.typography.bodySmall)
     }
 }

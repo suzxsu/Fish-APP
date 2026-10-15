@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -32,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -73,8 +75,9 @@ private fun parameterLabel(code: String) = (freshwaterParameters + saltwaterPara
 fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewModel = viewModel(factory = TankViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
     val tankData by vm.tanks.collectAsStateWithLifecycle()
     val tanks = tankData.orEmpty()
-    var search by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(TankFilter.all) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var filter by rememberSaveable { mutableStateOf(TankFilter.all) }
+    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     val visible = tanks.filter { summary ->
         val tank = summary.tank
         val query = search.trim()
@@ -87,9 +90,11 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
             TankFilter.archived -> tank.status == TankStatus.archived
         }
     }
-    Scaffold(containerColor = Color(0xFFF2F8FC)) { padding ->
+    Scaffold(containerColor = Color(0xFFF2F8FC), contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            TankListHeader(tanks.count { it.tank.status == TankStatus.active }, search, { search = it }, onCreate)
+            Box(Modifier.testTag("tank-list-screen")) {
+                TankListHeader(tanks.count { it.tank.status == TankStatus.active }, search, { search = it }, onCreate)
+            }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TankFilter.entries.forEach { item -> FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF1687E8), selectedLabelColor = Color.White)) }
             }
@@ -100,7 +105,7 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
                     EmptyState(if (filter == TankFilter.archived) "暂无归档鱼缸" else if (tanks.isEmpty()) "开启你的第一座鱼缸" else "没有匹配的鱼缸", if (search.isBlank()) "创建鱼缸后，在这里管理环境与养护记录。" else "没有匹配的鱼缸，请尝试其他名称。")
                     if (filter != TankFilter.archived) Button(onClick = onCreate, modifier = Modifier.padding(top = 16.dp)) { Text("创建鱼缸") }
                 }
-            } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 158.dp), modifier = Modifier.weight(1f), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 158.dp), state = gridState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(visible, key = { it.tank.id }) { summary ->
                     val photo by remember(summary.tank.photoId) { vm.photo(summary.tank.photoId) }.collectAsStateWithLifecycle()
                     TankCard(summary, photo, onClick = { onOpen(summary.tank.id) })
@@ -137,10 +142,11 @@ private fun TankCard(summary: TankSummary, photo: Photo?, onClick: () -> Unit) {
 
 @Composable
 private fun TankListHeader(activeCount: Int, search: String, onSearch: (String) -> Unit, onCreate: () -> Unit) {
-    Box(Modifier.fillMaxWidth().height(186.dp)) {
-        SubcomposeAsyncImage(model = ImageRequest.Builder(LocalContext.current).data(com.guanyji.app.R.drawable.dashboard_header_reef).crossfade(250).build(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(164.dp), loading = { Box(Modifier.fillMaxSize().background(Color(0xFF075078))) }, error = { Box(Modifier.fillMaxSize().background(Color(0xFF075078))) }, success = { SubcomposeAsyncImageContent() })
-        Box(Modifier.fillMaxWidth().height(164.dp).background(Brush.verticalGradient(listOf(Color(0xAA063B63), Color(0xE6003154), Color(0xFF075078)))))
-        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(Modifier.fillMaxWidth().height(186.dp + statusBarInset)) {
+        SubcomposeAsyncImage(model = ImageRequest.Builder(LocalContext.current).data(com.guanyji.app.R.drawable.dashboard_header_reef).crossfade(250).build(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxWidth().height(164.dp + statusBarInset), loading = { Box(Modifier.fillMaxSize().background(Color(0xFF075078))) }, error = { Box(Modifier.fillMaxSize().background(Color(0xFF075078))) }, success = { SubcomposeAsyncImageContent() })
+        Box(Modifier.fillMaxWidth().height(164.dp + statusBarInset).background(Brush.verticalGradient(listOf(Color(0xAA063B63), Color(0xE6003154), Color(0xFF075078)))))
+        Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 16.dp, top = statusBarInset + 24.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("鱼缸", style = MaterialTheme.typography.headlineMedium, color = Color.White)
                 Text("用心守护每一个小小的海洋", color = Color(0xFFE1F4FF), style = MaterialTheme.typography.bodyMedium)
@@ -182,7 +188,8 @@ private fun TankMetric(label: String, value: String, modifier: Modifier = Modifi
 
 @Composable
 fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Unit, vm: TankViewModel = viewModel(factory = TankViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
-    val loadedTank by remember(tankId) { vm.summary(tankId) }.collectAsStateWithLifecycle(initialValue = null)
+    val loadedTankState by remember(tankId) { vm.summary(tankId) }.collectAsStateWithLifecycle()
+    val loadedTank = (loadedTankState as? TankViewModel.SummaryState.Found)?.summary
     val existing = loadedTank?.tank
     var formLoaded by remember(tankId) { mutableStateOf(tankId == null) }
     val photoVm: PhotoViewModel = viewModel(key = "tank-photo-$tankId", factory = PhotoViewModelFactory(vm.photoRepository))
@@ -226,7 +233,7 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
     val leaveForm = rememberLeaveFormHandler(hasUnsavedChanges, onBack)
 
     if (typeConfirmation) ConfirmDialog(title = "切换鱼缸类型？", message = "请检查现有 ${activeFishCount} 条鱼的类型适配性。历史水质检测会保留。", confirmText = "确认切换", onConfirm = { type = if (type == TankType.freshwater) TankType.saltwater else TankType.freshwater; typeConfirmation = false }, onDismiss = { typeConfirmation = false })
-    Scaffold(topBar = { TopAppBarSimple(if (tankId == null) "创建鱼缸" else "编辑鱼缸", leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = formLoaded && !isSaving && !photoState.isBusy && photoState.cameraCaptureUri == null, onClick = {
+    Scaffold(topBar = { TopAppBarSimple(if (tankId == null) "创建鱼缸" else "编辑鱼缸", leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = formLoaded && (tankId == null || loadedTank != null) && !isSaving && !photoState.isBusy && photoState.cameraCaptureUri == null, onClick = {
         val parsedCapacity = effectiveCapacity
         if (name.isBlank()) { error = "请输入鱼缸名称"; return@Button }
         val measurements = listOf(length, width, height, capacity)
@@ -237,7 +244,12 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
         isSaving = true
         vm.save(tank, { onSaved(tank.id) }, { isSaving = false; error = it })
     }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text(if (isSaving) "保存中…" else "保存鱼缸") } } }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (tankId != null && loadedTankState == TankViewModel.SummaryState.Loading) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼缸…") }
+        else if (tankId != null && loadedTank == null) Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (loadedTankState is TankViewModel.SummaryState.Missing) "找不到这个鱼缸" else "鱼缸加载失败", modifier = Modifier.testTag("tank-edit-not-found"), style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = onBack) { Text("返回") }
+        }
+        else Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             PhotoPickerField(photoVm, Modifier.fillMaxWidth())
             OutlinedTextField(name, { name = it }, Modifier.fillMaxWidth(), label = { Text("名称 *") }, singleLine = true)
             Text("鱼缸类型", style = MaterialTheme.typography.titleSmall)
@@ -274,33 +286,50 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
 
 @Composable
 fun TankDetailScreen(tankId: String, onBack: () -> Unit, onEdit: () -> Unit, onOpenFish: (String) -> Unit, onQuickAction: (String, String) -> Unit, vm: TankViewModel = viewModel(factory = TankViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
-    val summaryFlow = remember(tankId) { vm.summary(tankId) }
-    val summary by summaryFlow.collectAsStateWithLifecycle()
-    val fish by remember(tankId) { vm.fish(tankId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val summaryState by remember(tankId) { vm.summary(tankId) }.collectAsStateWithLifecycle()
+    val foundSummary = (summaryState as? TankViewModel.SummaryState.Found)?.summary
+    val fishState by remember(tankId) { vm.fishState(tankId) }.collectAsStateWithLifecycle()
+    val fish = (fishState as? TankFishState.Success)?.fish.orEmpty()
     val tests by remember(tankId) { vm.tests(tankId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     val changes by remember(tankId) { vm.changes(tankId) }.collectAsStateWithLifecycle(initialValue = emptyList())
     val taskFlow = remember(tankId) { vm.tasks(tankId) }
     val tasks by taskFlow.collectAsStateWithLifecycle(initialValue = emptyList())
-    val photoId = summary?.tank?.photoId
+    val photoId = foundSummary?.tank?.photoId
     val photo by remember(photoId) { vm.photo(photoId) }.collectAsStateWithLifecycle()
-    var section by remember { mutableStateOf(TankSection.overview) }
+    var section by rememberSaveable { mutableStateOf(TankSection.overview) }
     var showArchive by remember { mutableStateOf(false) }
+    var archiving by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val tank = summary?.tank
-    if (showArchive) ConfirmDialog(title = "归档鱼缸？", message = if ((summary?.activeFishCount ?: 0) > 0) "仍有 ${summary?.activeFishCount} 条在养鱼。归档后停止待办任务，但鱼只归属和历史数据保留。请先自行安排转移或确认按当前归属保留。" else "归档后停止未来待办任务，历史数据仍可查询。", confirmText = if ((summary?.activeFishCount ?: 0) > 0) "确认保留鱼只并归档" else "归档", onConfirm = { vm.archive(tankId, true, onBack, { error = it }); showArchive = false }, onDismiss = { showArchive = false })
-    Scaffold(containerColor = Color(0xFFF2F8FC)) { padding ->
-        if (tank == null || summary == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼缸…") } else Column(Modifier.fillMaxSize().padding(padding)) {
-            Box(Modifier.fillMaxWidth().height(246.dp)) {
+    val tank = foundSummary?.tank
+    val activeFishCount = fish.count { it.status == FishStatus.active }
+    val quarantineFishCount = fish.count { it.status == FishStatus.quarantine }
+    if (showArchive && fishState is TankFishState.Success) ConfirmDialog(
+        title = "归档鱼缸？",
+        message = "${tank?.name.orEmpty()}\n在养：$activeFishCount 条 · 已隔离：$quarantineFishCount 条\n确认后将同步归档以上鱼只、停止该缸未来养护任务和提醒。已转出、已故及已归档鱼只状态不变；所有档案与历史记录保留。",
+        confirmText = "确认归档",
+        confirmEnabled = !archiving,
+        onConfirm = { if (!archiving) { archiving = true; vm.archive(tankId, true, { archiving = false; showArchive = false; onBack() }, { archiving = false; error = it; showArchive = false }) } },
+        onDismiss = { showArchive = false },
+    )
+    Scaffold(containerColor = Color(0xFFF2F8FC), contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
+        if (summaryState == TankViewModel.SummaryState.Loading) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼缸…") }
+        else if (summaryState is TankViewModel.SummaryState.Missing || summaryState is TankViewModel.SummaryState.Failed) Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (summaryState is TankViewModel.SummaryState.Missing) "找不到这个鱼缸" else "鱼缸加载失败", modifier = Modifier.testTag("tank-not-found"), style = MaterialTheme.typography.titleLarge)
+            Text(if (summaryState is TankViewModel.SummaryState.Missing) "鱼缸可能已被删除或链接已失效。" else (summaryState as TankViewModel.SummaryState.Failed).message)
+            TextButton(onClick = onBack) { Text("返回") }
+        } else if (tank != null && foundSummary != null) Column(Modifier.fillMaxSize().padding(padding)) {
+            val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+            Box(Modifier.fillMaxWidth().height(246.dp + statusBarInset)) {
                 if (photo == null) Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF0C678B), Color(0xFF062B48)))))
                 else {
                     ManagedPhotoImage(photo, true, Modifier.fillMaxSize())
                     Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x7700182D), Color.Transparent, Color(0xE6002034)))))
                 }
-                Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(horizontal = 8.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(start = 8.dp, end = 8.dp, top = statusBarInset + 8.dp, bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = Color.White) }
                     Row {
                         IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, contentDescription = "编辑鱼缸", tint = Color.White) }
-                        if (tank.status == TankStatus.active) IconButton(onClick = { showArchive = true }) { Text("⋮", color = Color.White, style = MaterialTheme.typography.titleLarge) }
+                        if (tank.status == TankStatus.active) IconButton(enabled = fishState is TankFishState.Success, onClick = { showArchive = true }) { Text("⋮", color = Color.White, style = MaterialTheme.typography.titleLarge) }
                     }
                 }
                 Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 18.dp, vertical = 16.dp)) {
@@ -308,16 +337,27 @@ fun TankDetailScreen(tankId: String, onBack: () -> Unit, onEdit: () -> Unit, onO
                         TankBadge(if (tank.type == TankType.freshwater) "淡水缸" else "海水缸", Color(0xFF1687E8))
                         TankBadge(if (tank.status == TankStatus.archived) "已归档" else "在养", if (tank.status == TankStatus.archived) Color(0xFF73869A) else Color(0xFF16A98A))
                     }
-                    Text(tank.name, style = MaterialTheme.typography.headlineSmall, color = Color.White, modifier = Modifier.padding(top = 8.dp))
+                    Text(tank.name, style = MaterialTheme.typography.headlineSmall, color = Color.White, modifier = Modifier.padding(top = 8.dp).testTag("tank-detail-title"))
                     tank.notes?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFE1F4FF), maxLines = 2) }
                 }
             }
+            when (val state = fishState) {
+                TankFishState.Loading -> Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) { LoadingState("正在核对鱼只数量…") }
+                is TankFishState.Error -> Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    ErrorState("鱼只数量加载失败，暂时无法归档。${state.message}", onRetry = vm::retryFish)
+                }
+                is TankFishState.Success -> Unit
+            }
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp).offset(y = (-12).dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                TankMetric("鱼只", "${fish.count { it.status == FishStatus.active || it.status == FishStatus.quarantine }} 条", Modifier.weight(1f))
+                TankMetric("鱼只", when (fishState) {
+                    TankFishState.Loading -> "加载中"
+                    is TankFishState.Error -> "暂不可用"
+                    is TankFishState.Success -> "${fish.count { it.status == FishStatus.active || it.status == FishStatus.quarantine }} 条"
+                }, Modifier.weight(1f))
                 TankMetric("容量", tank.capacityValue?.let { "${it.pretty()} ${tank.capacityUnit.orEmpty()}" } ?: "未记录", Modifier.weight(1f))
                 val latestValue = tests.flatMap { record -> record.values.mapNotNull { value -> value.value?.let { Triple(record.test.measuredAt, value, it) } } }.maxByOrNull { it.first }?.second
                 TankMetric(latestValue?.let { parameterLabel(it.parameterCode) } ?: "最近水质", latestValue?.let { "${it.value?.pretty()} ${it.unit}" } ?: "尚未测量", Modifier.weight(1f))
-                TankMetric("最近换水", summary?.lastWaterChangeAt?.let(::formatDate) ?: "暂无记录", Modifier.weight(1f))
+                TankMetric("最近换水", foundSummary.lastWaterChangeAt?.let(::formatDate) ?: "暂无记录", Modifier.weight(1f))
             }
             ScrollableTabRow(selectedTabIndex = section.ordinal, containerColor = Color(0xFFF2F8FC), contentColor = Color(0xFF1687E8), edgePadding = 8.dp) { TankSection.entries.forEach { Tab(selected = section == it, onClick = { section = it }, text = { Text(it.label) }) } }
             Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -334,7 +374,7 @@ fun TankDetailScreen(tankId: String, onBack: () -> Unit, onEdit: () -> Unit, onO
                     }
                     TankSection.fish -> {
                         if (tank.status == TankStatus.active) Button(onClick = { onQuickAction("fish", tankId) }, modifier = Modifier.fillMaxWidth()) { Icon(Icons.Outlined.Add, contentDescription = null); Text("添加鱼") }
-                        if (fish.isEmpty()) InfoCard("暂无鱼只", content = { Text("添加鱼只档案后，可在这里查看所属鱼缸与状态。") })
+                        if (fishState is TankFishState.Success && fish.isEmpty()) InfoCard("暂无鱼只", content = { Text("添加鱼只档案后，可在这里查看所属鱼缸与状态。") })
                         fish.forEach { record ->
                             val fishPhoto by remember(record.coverPhotoId) { vm.photo(record.coverPhotoId) }.collectAsStateWithLifecycle()
                             Card(Modifier.fillMaxWidth().clickable { onOpenFish(record.id) }, colors = CardDefaults.cardColors(containerColor = Color.White)) {
@@ -380,10 +420,19 @@ fun TankDetailScreen(tankId: String, onBack: () -> Unit, onEdit: () -> Unit, onO
                             InfoCard("换水计划", content = { Text("计划日期：${formatDate(plannedAt)}"); Text("对应完成记录：${formatDate(change.completedAt)}"); TextButton(onClick = { onQuickAction("change/${change.id}", tankId) }) { Text("编辑记录与计划") } })
                         }
                     }
-                    TankSection.stats -> InfoCard("真实记录统计", content = { Text("在养鱼只：${fish.count { it.status == FishStatus.active || it.status == FishStatus.quarantine }}"); Text("水质检测：${tests.size} 次"); Text("换水记录：${changes.size} 次"); Text("统计只包含已保存的本机记录。") })
+                    TankSection.stats -> InfoCard("真实记录统计", content = {
+                        when (fishState) {
+                            TankFishState.Loading -> Text("鱼只数量加载中")
+                            is TankFishState.Error -> Text("鱼只数量暂不可用")
+                            is TankFishState.Success -> Text("在养鱼只：${fish.count { it.status == FishStatus.active || it.status == FishStatus.quarantine }}")
+                        }
+                        Text("水质检测：${tests.size} 次")
+                        Text("换水记录：${changes.size} 次")
+                        Text("统计只包含已保存的本机记录。")
+                    })
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                if (tank.status == TankStatus.active) OutlinedButton(onClick = { showArchive = true }, modifier = Modifier.fillMaxWidth()) { Text("归档鱼缸") }
+                if (fishState is TankFishState.Success && tank.status == TankStatus.active) OutlinedButton(onClick = { showArchive = true }, modifier = Modifier.fillMaxWidth()) { Text("归档鱼缸") }
             }
         }
     }
@@ -405,7 +454,8 @@ private fun QuickActions(tankId: String, onQuickAction: (String, String) -> Unit
 
 @Composable
 fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, onBack: () -> Unit, vm: TankViewModel = viewModel(factory = TankViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
-    val summary by remember(tankId) { vm.summary(tankId) }.collectAsStateWithLifecycle(initialValue = null)
+    val summaryState by remember(tankId) { vm.summary(tankId) }.collectAsStateWithLifecycle()
+    val summary = (summaryState as? TankViewModel.SummaryState.Found)?.summary
     val tank = summary?.tank
     val parameters = remember(tank?.type) { tank?.type?.let(::waterParameters).orEmpty() }
     val actionTitle = when (action) { "fish" -> "添加鱼"; "water" -> "记录水质"; "change" -> if (editId == null) "记录换水" else "编辑换水记录"; else -> "添加养护任务" }
@@ -462,7 +512,7 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
     }
     val taskLabels = mapOf(CareTaskType.feeding to "喂食", CareTaskType.water_change to "换水", CareTaskType.water_test to "水质检测", CareTaskType.salinity_test to "盐度检测", CareTaskType.maintenance to "设备维护", CareTaskType.custom to "自定义")
 
-    Scaffold(topBar = { TopAppBarSimple(actionTitle, leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !isSaving && formLoaded, onClick = {
+    Scaffold(topBar = { TopAppBarSimple(actionTitle, leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !isSaving && formLoaded && tank != null, onClick = {
         if (tank == null || isSaving || !formLoaded) return@Button
         val now = System.currentTimeMillis()
         val failed = { message: String -> isSaving = false; error = message }
@@ -508,7 +558,11 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
             }
         }
     }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text(if (isSaving) "保存中…" else "保存") } } }) { padding ->
-        if (tank == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState() }
+        if (summaryState == TankViewModel.SummaryState.Loading) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼缸…") }
+        else if (tank == null) Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(if (summaryState is TankViewModel.SummaryState.Missing) "找不到这个鱼缸" else "鱼缸加载失败", modifier = Modifier.testTag("tank-action-not-found"), style = MaterialTheme.typography.titleLarge)
+            TextButton(onClick = onBack) { Text("返回") }
+        }
         else Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("关联鱼缸：${tank.name}", style = MaterialTheme.typography.titleSmall)
             when (action) {

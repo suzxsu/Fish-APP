@@ -64,10 +64,17 @@ class LocalRepository(
     suspend fun archiveTank(id: String, updatedAt: Long, confirmedWithActiveFish: Boolean) = withContext(ioDispatcher) {
         database.withTransaction {
             val tank = database.tanks().get(id) ?: error("Tank does not exist")
-            val activeFish = database.fish().countActiveForTank(id)
-            require(activeFish == 0 || confirmedWithActiveFish) { "Confirm the archive plan for active fish" }
+            require(tank.status == TankStatus.active) { "Tank is already archived" }
+            val currentFish = database.fish().activeForTank(id)
+            require(currentFish.isEmpty() || confirmedWithActiveFish) { "Confirm the archive plan for active fish" }
             database.tanks().update(tank.copy(status = TankStatus.archived, updatedAt = updatedAt))
+            currentFish.forEach { fish ->
+                val changed = database.fish().setStatus(fish.id, FishStatus.archived, updatedAt, true, null, updatedAt)
+                check(changed == 1) { "Fish status changed during tank archive" }
+                database.fish().insertEvent(FishEvent(fishId = fish.id, type = FishEventType.archived, occurredAt = updatedAt, tankId = id, targetTankId = null, status = fish.status))
+            }
             database.care().cancelPendingForTank(id, updatedAt)
+            database.care().disableRulesForTank(id, updatedAt)
         }
     }
 
@@ -232,7 +239,9 @@ class LocalRepository(
         require(intervalDays == null || intervalDays in 1..365) { "重复间隔需为 1 到 365 天" }
         require(value.type != CareTaskType.custom || !value.customTitle.isNullOrBlank()) { "请输入自定义任务名称" }
         database.withTransaction {
-            require(value.tankId == null || database.tanks().get(value.tankId) != null) { "鱼缸不存在" }
+            val taskTank = value.tankId?.let { database.tanks().get(it) }
+            require(value.tankId == null || taskTank != null) { "鱼缸不存在" }
+            require(taskTank == null || taskTank.status == TankStatus.active) { "已归档鱼缸不能安排未来任务" }
             val fish = value.fishId?.let { database.fish().get(it) }
             require(value.fishId == null || fish != null) { "鱼只不存在" }
             require(fish == null || fish.status == FishStatus.active || fish.status == FishStatus.quarantine) { "已故或转出的鱼只不能安排未来任务" }
