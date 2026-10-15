@@ -133,6 +133,7 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
     var unit by remember(tankId) { mutableStateOf("L") }
     var startedAt by remember(tankId) { mutableStateOf<Long?>(null) }
     var equipment by remember(tankId) { mutableStateOf("") }
+    var salinityManagementEnabled by remember(tankId) { mutableStateOf(false) }
     var notes by remember(tankId) { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var typeConfirmation by remember { mutableStateOf(false) }
@@ -143,7 +144,7 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
             name = existing.name; type = existing.type
             length = existing.lengthCm?.pretty().orEmpty(); width = existing.widthCm?.pretty().orEmpty(); height = existing.heightCm?.pretty().orEmpty()
             capacity = existing.capacityValue?.takeUnless { existing.capacityIsEstimated }?.pretty().orEmpty()
-            unit = existing.capacityUnit ?: "L"; startedAt = existing.startedAt; equipment = existing.equipment.orEmpty(); notes = existing.notes.orEmpty()
+            unit = existing.capacityUnit ?: "L"; startedAt = existing.startedAt; equipment = existing.equipment.orEmpty(); notes = existing.notes.orEmpty(); salinityManagementEnabled = existing.salinityManagementEnabled
             formLoaded = true
         }
     }
@@ -151,16 +152,24 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
     val estimateInUnit = estimate?.let { if (unit == "gal") it / 3.785411784 else it }
     val effectiveCapacity = capacity.toDoubleOrNull() ?: estimateInUnit
     val hasRealOverride = capacity.toDoubleOrNull() != null
+    val hasUnsavedChanges = photoState.isBusy || if (tankId == null) {
+        name.isNotBlank() || length.isNotBlank() || width.isNotBlank() || height.isNotBlank() || capacity.isNotBlank() || equipment.isNotBlank() || notes.isNotBlank() || salinityManagementEnabled || photoState.photo != null
+    } else formLoaded && existing != null && (
+        name != existing.name || type != existing.type || length.toDoubleOrNull() != existing.lengthCm || width.toDoubleOrNull() != existing.widthCm || height.toDoubleOrNull() != existing.heightCm ||
+            capacity.toDoubleOrNull() != existing.capacityValue.takeUnless { existing.capacityIsEstimated } || unit != (existing.capacityUnit ?: "L") || startedAt != existing.startedAt ||
+            equipment != existing.equipment.orEmpty() || salinityManagementEnabled != existing.salinityManagementEnabled || notes != existing.notes.orEmpty() || photoState.photo?.id != existing.photoId
+        )
+    val leaveForm = rememberLeaveFormHandler(hasUnsavedChanges, onBack)
 
     if (typeConfirmation) ConfirmDialog(title = "切换鱼缸类型？", message = "请检查现有 ${activeFishCount} 条鱼的类型适配性。历史水质检测会保留。", confirmText = "确认切换", onConfirm = { type = if (type == TankType.freshwater) TankType.saltwater else TankType.freshwater; typeConfirmation = false }, onDismiss = { typeConfirmation = false })
-    Scaffold(topBar = { TopAppBarSimple(if (tankId == null) "创建鱼缸" else "编辑鱼缸", onBack) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = formLoaded && !isSaving && !photoState.isBusy && photoState.cameraCaptureUri == null, onClick = {
+    Scaffold(topBar = { TopAppBarSimple(if (tankId == null) "创建鱼缸" else "编辑鱼缸", leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = formLoaded && !isSaving && !photoState.isBusy && photoState.cameraCaptureUri == null, onClick = {
         val parsedCapacity = effectiveCapacity
         if (name.isBlank()) { error = "请输入鱼缸名称"; return@Button }
         val measurements = listOf(length, width, height, capacity)
         if (measurements.any { it.isNotBlank() && it.toDoubleOrNull() == null }) { error = "尺寸和容量请输入有效数字"; return@Button }
         if (measurements.mapNotNull(String::toDoubleOrNull).any { it <= 0 || !it.isFinite() }) { error = "尺寸和容量必须大于 0"; return@Button }
         val now = System.currentTimeMillis()
-        val tank = Tank(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name, type = type, photoId = photoState.photo?.id ?: existing?.photoId, lengthCm = length.toDoubleOrNull(), widthCm = width.toDoubleOrNull(), heightCm = height.toDoubleOrNull(), capacityValue = parsedCapacity, capacityUnit = parsedCapacity?.let { unit }, capacityIsEstimated = parsedCapacity != null && !hasRealOverride && estimate != null, startedAt = startedAt, equipment = equipment.ifBlank { null }, status = existing?.status ?: TankStatus.active, notes = notes.ifBlank { null }, createdAt = existing?.createdAt ?: now, updatedAt = now)
+        val tank = Tank(id = existing?.id ?: java.util.UUID.randomUUID().toString(), name = name, type = type, photoId = photoState.photo?.id ?: existing?.photoId, lengthCm = length.toDoubleOrNull(), widthCm = width.toDoubleOrNull(), heightCm = height.toDoubleOrNull(), capacityValue = parsedCapacity, capacityUnit = parsedCapacity?.let { unit }, capacityIsEstimated = parsedCapacity != null && !hasRealOverride && estimate != null, startedAt = startedAt, equipment = equipment.ifBlank { null }, status = existing?.status ?: TankStatus.active, salinityManagementEnabled = type == TankType.saltwater && salinityManagementEnabled, notes = notes.ifBlank { null }, createdAt = existing?.createdAt ?: now, updatedAt = now)
         isSaving = true
         vm.save(tank, { onSaved(tank.id) }, { isSaving = false; error = it })
     }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text(if (isSaving) "保存中…" else "保存鱼缸") } } }) { padding ->
@@ -173,6 +182,10 @@ fun TankFormScreen(tankId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
                 FilterChip(type == TankType.saltwater, { if (type != TankType.saltwater) { if (activeFishCount > 0) typeConfirmation = true else type = TankType.saltwater } }, label = { Text("海水") })
             }
             Text("水质参数模板：${if (type == TankType.freshwater) "温度、pH、氨/铵、亚硝酸盐、硝酸盐" else "温度、pH、氨/铵、亚硝酸盐、硝酸盐、盐度、比重、碱度"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (type == TankType.saltwater) Row(verticalAlignment = Alignment.CenterVertically) {
+                Switch(salinityManagementEnabled, { salinityManagementEnabled = it }, modifier = Modifier.padding(end = 8.dp))
+                Column { Text("启用盐度管理"); Text("开启后可安排盐度检测提醒；无测量值时只提示检测。", style = MaterialTheme.typography.bodySmall) }
+            }
             Text("尺寸（厘米）", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(length, { length = it }, Modifier.weight(1f), label = { Text("长") }, singleLine = true)
@@ -307,8 +320,10 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
     var supplies by remember { mutableStateOf("") }
     var nextPlannedAt by remember { mutableStateOf<Long?>(null) }
     var taskType by remember { mutableStateOf(CareTaskType.water_change) }
+    var taskCustomTitle by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var date by remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    var initialDate by remember(editId) { mutableLongStateOf(date) }
     var error by remember { mutableStateOf<String?>(null) }
     var warning by remember { mutableStateOf<String?>(null) }
     var pendingWaterTest by remember { mutableStateOf<Pair<WaterTest, List<WaterTestValue>>?>(null) }
@@ -322,17 +337,25 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
                 beforeTemperature = record.beforeTemperature?.pretty().orEmpty(); afterTemperature = record.afterTemperature?.pretty().orEmpty()
                 beforeSalinity = record.beforeSalinity?.pretty().orEmpty(); afterSalinity = record.afterSalinity?.pretty().orEmpty()
                 supplies = record.supplies.orEmpty(); notes = record.notes.orEmpty(); date = record.completedAt; nextPlannedAt = record.nextPlannedAt
+                initialDate = record.completedAt
             } else error = "无法加载这条换水记录"
             formLoaded = true
         }
     }
+    val hasUnsavedChanges = when (action) {
+        "fish" -> name.isNotBlank() || species.isNotBlank() || notes.isNotBlank()
+        "water" -> date != initialDate || values.values.any(String::isNotBlank) || notes.isNotBlank() || methods.values.any(String::isNotBlank) || parameterNotes.values.any(String::isNotBlank) || targetMins.values.any(String::isNotBlank) || targetMaxs.values.any(String::isNotBlank) || selectedParameters != parameters.map { it.code }.toSet() || units != parameters.associate { it.code to it.unit }
+        "change" -> date != initialDate || volume.isNotBlank() || beforeTemperature.isNotBlank() || afterTemperature.isNotBlank() || beforeSalinity.isNotBlank() || afterSalinity.isNotBlank() || supplies.isNotBlank() || notes.isNotBlank() || nextPlannedAt != null || volumeUnit != "L"
+        else -> date != initialDate || taskType != CareTaskType.water_change || taskCustomTitle.isNotBlank() || notes.isNotBlank()
+    }
+    val leaveForm = rememberLeaveFormHandler(formLoaded && hasUnsavedChanges, onBack)
     val persistWaterTest: (WaterTest, List<WaterTestValue>) -> Unit = { test, records ->
         isSaving = true
         vm.addWaterTest(test, records, { isSaving = false; onBack() }, { message -> isSaving = false; error = message })
     }
     val taskLabels = mapOf(CareTaskType.feeding to "喂食", CareTaskType.water_change to "换水", CareTaskType.water_test to "水质检测", CareTaskType.salinity_test to "盐度检测", CareTaskType.maintenance to "设备维护", CareTaskType.custom to "自定义")
 
-    Scaffold(topBar = { TopAppBarSimple(actionTitle, onBack) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !isSaving && formLoaded, onClick = {
+    Scaffold(topBar = { TopAppBarSimple(actionTitle, leaveForm) }, bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !isSaving && formLoaded, onClick = {
         if (tank == null || isSaving || !formLoaded) return@Button
         val now = System.currentTimeMillis()
         val failed = { message: String -> isSaving = false; error = message }
@@ -369,11 +392,12 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
                 val optionalNumbers = listOf(beforeTemperature, afterTemperature, beforeSalinity, afterSalinity)
                 if (optionalNumbers.any { it.isNotBlank() && (it.toDoubleOrNull()?.let { number -> number > 0 && number.isFinite() } != true) }) { error = "水温和盐度须为大于 0 的有效数值"; return@Button }
                 isSaving = true
-                vm.addWaterChange(WaterChange(id = editId ?: java.util.UUID.randomUUID().toString(), tankId = tankId, completedAt = date, volumeValue = quantity, volumeUnit = volumeUnit, ratio = null, nextPlannedAt = nextPlannedAt, notes = notes.ifBlank { null }, beforeTemperature = beforeTemperature.toDoubleOrNull(), afterTemperature = afterTemperature.toDoubleOrNull(), temperatureUnit = if (beforeTemperature.isNotBlank() || afterTemperature.isNotBlank()) "°C" else null, beforeSalinity = beforeSalinity.toDoubleOrNull(), afterSalinity = afterSalinity.toDoubleOrNull(), salinityUnit = if (beforeSalinity.isNotBlank() || afterSalinity.isNotBlank()) "ppt" else null, supplies = supplies.ifBlank { null }), saved, failed)
+                vm.addWaterChange(WaterChange(id = editId ?: java.util.UUID.randomUUID().toString(), tankId = tankId, completedAt = date, volumeValue = quantity, volumeUnit = volumeUnit, ratio = calculateWaterChangeRatioPercent(quantity, volumeUnit, tank.capacityValue, tank.capacityUnit), nextPlannedAt = nextPlannedAt, notes = notes.ifBlank { null }, beforeTemperature = beforeTemperature.toDoubleOrNull(), afterTemperature = afterTemperature.toDoubleOrNull(), temperatureUnit = if (beforeTemperature.isNotBlank() || afterTemperature.isNotBlank()) "°C" else null, beforeSalinity = beforeSalinity.toDoubleOrNull(), afterSalinity = afterSalinity.toDoubleOrNull(), salinityUnit = if (beforeSalinity.isNotBlank() || afterSalinity.isNotBlank()) "ppt" else null, supplies = supplies.ifBlank { null }), saved, failed)
             }
             else -> {
+                if (taskType == CareTaskType.custom && taskCustomTitle.isBlank()) { error = "请输入自定义任务名称"; return@Button }
                 isSaving = true
-                vm.addTask(CareTask(tankId = tankId, fishId = null, type = taskType, plannedAt = date, recurrenceRule = null, notes = notes.ifBlank { null }, createdAt = now, updatedAt = now), saved, failed)
+                vm.addTask(CareTask(tankId = tankId, fishId = null, type = taskType, plannedAt = date, recurrenceRule = null, notes = notes.ifBlank { null }, createdAt = now, updatedAt = now, customTitle = taskCustomTitle.trim().ifBlank { null }), saved, failed)
             }
         }
     }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) { Text(if (isSaving) "保存中…" else "保存") } } }) { padding ->
@@ -432,7 +456,9 @@ fun TankQuickFormScreen(tankId: String, action: String, editId: String? = null, 
                 }
                 else -> {
                     var menuOpen by remember { mutableStateOf(false) }
-                    Box { OutlinedButton(onClick = { menuOpen = true }) { Text("任务类型：${taskLabels[taskType]}") }; DropdownMenu(menuOpen, { menuOpen = false }) { taskLabels.forEach { (type, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { taskType = type; menuOpen = false }) } } }
+                    val availableTaskLabels = taskLabels.filterKeys { it != CareTaskType.salinity_test || (tank.type == TankType.saltwater && tank.salinityManagementEnabled) }
+                    Box { OutlinedButton(onClick = { menuOpen = true }) { Text("任务类型：${availableTaskLabels[taskType] ?: "换水"}") }; DropdownMenu(menuOpen, { menuOpen = false }) { availableTaskLabels.forEach { (type, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { taskType = type; menuOpen = false }) } } }
+                    if (taskType == CareTaskType.custom) OutlinedTextField(taskCustomTitle, { taskCustomTitle = it }, Modifier.fillMaxWidth(), label = { Text("自定义任务名称 *") }, singleLine = true)
                     DateField("计划时间", date) { date = it ?: date }
                     OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("备注") }, minLines = 2)
                 }

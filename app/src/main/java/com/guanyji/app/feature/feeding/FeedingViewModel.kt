@@ -22,7 +22,6 @@ class FeedingViewModel(application: Application) : AndroidViewModel(application)
     fun save(event: FeedingEvent, targets: List<FeedingTarget>, onSaved: () -> Unit, onError: (String) -> Unit) = viewModelScope.launch {
         try { repository.saveFeeding(event, targets); onSaved() } catch (e: CancellationException) { throw e } catch (e: Exception) { onError(e.message ?: "喂食记录保存失败") }
     }
-    override fun onCleared() { database.close() }
     companion object {
         fun factory(application: Application) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

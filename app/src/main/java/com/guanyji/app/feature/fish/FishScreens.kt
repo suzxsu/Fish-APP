@@ -139,8 +139,15 @@ fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
     }
     val photoState by photoVm.state.collectAsStateWithLifecycle()
     val tank = tanks.firstOrNull { it.id == tankId }
+    val hasUnsavedChanges = photoState.isBusy || if (fishId == null) {
+        name.isNotBlank() || species.isNotBlank() || length.isNotBlank() || weight.isNotBlank() || sex.isNotBlank() || source.isNotBlank() || notes.isNotBlank() || photoState.photo != null
+    } else initialized && existing != null && (
+        name != existing.name || species != existing.species.orEmpty() || tankId != existing.tankId || addedAt != existing.addedAt || birthDate != existing.birthDate ||
+            sex != existing.sex.orEmpty() || source != existing.source.orEmpty() || notes != existing.notes.orEmpty() || photoState.photo?.id != existing.coverPhotoId
+        )
+    val leaveForm = rememberLeaveFormHandler(hasUnsavedChanges, onBack)
     Scaffold(
-        topBar = { FishTopBar(if (fishId == null) "添加鱼" else "编辑鱼", onBack) },
+        topBar = { FishTopBar(if (fishId == null) "添加鱼" else "编辑鱼", leaveForm) },
         bottomBar = {
             Surface(shadowElevation = 4.dp) {
                 Button(enabled = !busy && !photoState.isBusy, onClick = {
@@ -183,6 +190,8 @@ fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
 fun FishDetailScreen(fishId: String, onBack: () -> Unit, onEdit: () -> Unit, onOpenRecords: (String) -> Unit = {}, onQuickFeeding: () -> Unit = {}, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
     val summary by remember(fishId) { vm.summary(fishId) }.collectAsStateWithLifecycle()
     val tanks by vm.tanks.collectAsStateWithLifecycle(); val events by remember(fishId) { vm.events(fishId) }.collectAsStateWithLifecycle(); val growth by remember(fishId) { vm.growth(fishId) }.collectAsStateWithLifecycle()
+    val latestLength by remember(fishId) { vm.latestLength(fishId) }.collectAsStateWithLifecycle()
+    val latestWeight by remember(fishId) { vm.latestWeight(fishId) }.collectAsStateWithLifecycle()
     val fish = summary?.fish; val photo by remember(fish?.coverPhotoId) { vm.photo(fish?.coverPhotoId) }.collectAsStateWithLifecycle()
     var action by remember { mutableStateOf<FishStatus?>(null) }; var showArchive by remember { mutableStateOf(false) }; var unknownDeath by remember { mutableStateOf(false) }; var showMove by remember { mutableStateOf(false) }; var targetTankId by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }; var busy by remember { mutableStateOf(false) }; var date by remember { mutableLongStateOf(todayStart()) }
@@ -195,8 +204,9 @@ fun FishDetailScreen(fishId: String, onBack: () -> Unit, onEdit: () -> Unit, onO
                 Text("${tanks.firstOrNull { it.id == fish.tankId }?.name ?: "鱼缸未找到"} · ${fish.status.label()}")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     InfoCard("入缸时长", { Text("${durationDays(fish.addedAt, fish.deathDate, fish.status == FishStatus.deceased)} 天") }, Modifier.weight(1f))
-                    InfoCard("最近体长", { Text(summary?.lastLength?.let { "${it.pretty()} ${summary?.lastLengthUnit.orEmpty()}" } ?: "暂无记录"); if (summary?.lastLength != null) summary?.lastMeasuredAt?.let { Text(formatDate(it), style = MaterialTheme.typography.bodySmall) } }, Modifier.weight(1f))
+                    InfoCard("最近体长", { Text(latestLength?.let { "${it.lengthValue?.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "暂无记录"); latestLength?.let { Text(formatDate(it.measuredAt), style = MaterialTheme.typography.bodySmall) } }, Modifier.weight(1f))
                 }
+                InfoCard("最近体重", { Text(latestWeight?.let { "${it.weightValue?.pretty()} ${it.weightUnit.orEmpty()}" } ?: "暂无记录"); latestWeight?.let { Text(formatDate(it.measuredAt), style = MaterialTheme.typography.bodySmall) } })
                 InfoCard("档案信息", { Text("入缸日期：${formatDate(fish.addedAt)}"); Text("出生日期：${fish.birthDate?.let(::formatDate) ?: "未记录"}"); if (fish.status == FishStatus.deceased) Text("死亡日期：${fish.deathDate?.let(::formatDate) ?: "未知"}"); Text("性别：${fish.sex ?: "未记录"} · 来源：${fish.source ?: "未记录"}"); Text("备注：${fish.notes ?: "暂无"}") })
                 InfoCard("今日喂食", { Text(if (summary!!.todayFeedings == 0) "暂无记录" else "已记录 ${summary!!.todayFeedings} 次") })
                 InfoCard("成长记录", { Text("共 ${growth.size} 条"); growth.take(3).forEach { Text("${formatDate(it.measuredAt)} · 体长 ${it.lengthValue?.let { n -> "${n.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "暂无记录"} · 体重 ${it.weightValue?.let { n -> "${n.pretty()} ${it.weightUnit.orEmpty()}" } ?: "暂无记录"}") }; TextButton(onClick = { onOpenRecords("growth") }) { Text("查看成长") } })

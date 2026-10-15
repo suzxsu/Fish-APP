@@ -23,11 +23,11 @@ class TankViewModel(application: Application) : AndroidViewModel(application) {
     val tanks = repository.tanks().map<List<TankSummary>, List<TankSummary>?> { it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun save(tank: Tank, onSaved: () -> Unit, onError: (String) -> Unit) = viewModelScope.launch {
-        try { repository.saveTank(tank); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "保存失败") }
+        try { repository.saveTank(tank); CareNotificationScheduler.sync(getApplication()); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "保存失败") }
     }
 
     fun archive(id: String, confirmedWithFish: Boolean, onSaved: () -> Unit, onError: (String) -> Unit) = viewModelScope.launch {
-        try { repository.archiveTank(id, System.currentTimeMillis(), confirmedWithFish); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "归档失败") }
+        try { repository.archiveTank(id, System.currentTimeMillis(), confirmedWithFish); CareNotificationScheduler.sync(getApplication()); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "归档失败") }
     }
 
     fun summary(id: String?) = (id?.let(repository::tankSummary) ?: flowOf(null)).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
@@ -56,8 +56,6 @@ class TankViewModel(application: Application) : AndroidViewModel(application) {
     fun addTask(value: CareTask, onSaved: () -> Unit, onError: (String) -> Unit) = viewModelScope.launch {
         try { repository.saveCareTask(value); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "保存失败") }
     }
-
-    override fun onCleared() { database.close() }
 
     companion object {
         fun factory(application: Application) = object : ViewModelProvider.Factory {

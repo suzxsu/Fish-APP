@@ -1,6 +1,7 @@
 package com.guanyji.app.data.local
 
 import androidx.room.Entity
+import androidx.room.ColumnInfo
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -47,6 +48,7 @@ data class Tank(
     val startedAt: Long?,
     val equipment: String? = null,
     val status: TankStatus = TankStatus.active,
+    @ColumnInfo(defaultValue = "0") val salinityManagementEnabled: Boolean = false,
     val notes: String?,
     val createdAt: Long,
     val updatedAt: Long,
@@ -199,7 +201,7 @@ data class WaterChange(
         ForeignKey(entity = Tank::class, parentColumns = ["id"], childColumns = ["tankId"], onDelete = ForeignKey.SET_NULL),
         ForeignKey(entity = Fish::class, parentColumns = ["id"], childColumns = ["fishId"], onDelete = ForeignKey.SET_NULL),
     ],
-    indices = [Index(value = ["plannedAt", "status"]), Index("tankId"), Index("fishId")],
+    indices = [Index(value = ["plannedAt", "status"]), Index("tankId"), Index("fishId"), Index(value = ["ruleId", "instanceKey"], unique = true)],
 )
 data class CareTask(
     @PrimaryKey val id: String = newId(),
@@ -212,6 +214,30 @@ data class CareTask(
     val notes: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    val ruleId: String? = null,
+    val instanceKey: String? = null,
+    @ColumnInfo(defaultValue = "0") val reminderEnabled: Boolean = false,
+    val postponedFrom: Long? = null,
+    val lastPostponedAt: Long? = null,
+    val customTitle: String? = null,
+)
+
+@Entity(tableName = "care_rules", indices = [Index("tankId"), Index("fishId")])
+data class CareRule(
+    @PrimaryKey val id: String = newId(),
+    val tankId: String?,
+    val fishId: String?,
+    val type: CareTaskType,
+    val intervalDays: Int,
+    val localHour: Int,
+    val localMinute: Int,
+    val timeZoneId: String,
+    val notes: String?,
+    val reminderEnabled: Boolean,
+    val enabled: Boolean = true,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val customTitle: String? = null,
 )
 
 @Entity(

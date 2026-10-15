@@ -23,6 +23,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.guanyji.app.core.designsystem.EmptyState
 import com.guanyji.app.core.designsystem.InfoCard
 import com.guanyji.app.core.designsystem.LoadingState
+import com.guanyji.app.core.designsystem.rememberLeaveFormHandler
 import com.guanyji.app.data.local.*
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -63,9 +64,20 @@ fun FeedingScreen(
     var foodMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val tankName = { id: String? -> tanks.firstOrNull { it.id == id }?.name ?: "鱼缸" }
+    val hasUnsavedChanges = editing?.let { row ->
+        val event = row.event
+        val originalTargets = row.targets
+        val originalScope = originalTargets.firstOrNull()?.targetType ?: FeedingTargetType.tank
+        val originalFish = originalTargets.mapNotNull { it.fishId }.toSet()
+        chosenTank != event.tankId.orEmpty() || fedAt != event.fedAt || food != event.foodType.orEmpty() || amount != event.amountValue?.toString().orEmpty() ||
+            unit != (event.amountUnit ?: "g") || result != event.result.orEmpty() || notes != event.notes.orEmpty() ||
+            (scope == FeedingScope.tank) != (originalScope == FeedingTargetType.tank) || selectedFish != originalFish
+    } ?: (food.isNotBlank() || amount.isNotBlank() || result.isNotBlank() || notes.isNotBlank() || mode != FeedingMode.quick ||
+        (fishId != null && selectedFish != setOf(fishId)) || (fishId == null && tankId != null && chosenTank != tankId))
+    val leaveForm = rememberLeaveFormHandler(hasUnsavedChanges, onBack)
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(if (editing == null) "喂食记录" else "编辑喂食") }, navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } }) },
+        topBar = { TopAppBar(title = { Text(if (editing == null) "喂食记录" else "编辑喂食") }, navigationIcon = { IconButton(onClick = leaveForm) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } }) },
         bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !saving && tank != null, onClick = {
             if (saving) return@Button
             val cleanFood = food.trim()

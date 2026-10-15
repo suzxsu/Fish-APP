@@ -1,8 +1,12 @@
 package com.guanyji.app.data
 
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
 import android.content.Context
 import androidx.room.Room
+import androidx.room.migration.Migration
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -24,7 +28,7 @@ class LocalRepositoryTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
     private lateinit var db: FishDatabase
     private lateinit var repository: LocalRepository
-    private val now = 1_800_000_000_000L
+    private val now = System.currentTimeMillis() - 86_400_000L
 
     @get:Rule
     val migrationHelper = MigrationTestHelper(
@@ -46,11 +50,11 @@ class LocalRepositoryTest {
         repository.saveTank(tank)
         val fish = fish(tank.id)
         repository.saveFish(fish)
-        val record = GrowthRecord(fishId = fish.id, measuredAt = now, lengthValue = null, lengthUnit = null, weightValue = null, weightUnit = null, method = null, photoId = null, notes = null)
+        val record = GrowthRecord(fishId = fish.id, measuredAt = now, lengthValue = null, lengthUnit = null, weightValue = 1.0, weightUnit = "g", method = null, photoId = null, notes = null)
         repository.saveGrowthRecord(record)
         assertNotEquals(tank.id, fish.id)
         assertNull(db.growthRecords().observeForFish(fish.id).first().single().lengthValue)
-        assertNull(db.growthRecords().observeForFish(fish.id).first().single().weightValue)
+        assertEquals(1.0, db.growthRecords().observeForFish(fish.id).first().single().weightValue!!, 0.0)
     }
 
     @Test fun initialGrowthIsAtomicAndStatusAndMoveEventsKeepTankHistory() = runBlocking {
@@ -64,6 +68,37 @@ class LocalRepositoryTest {
         val move = db.fish().observeEvents(fish.id).first().single { it.type == FishEventType.moved }
         assertEquals(oldTank.id, move.tankId); assertEquals(newTank.id, move.targetTankId)
         assertEquals(newTank.id, db.fish().get(fish.id)?.tankId)
+    }
+
+    @Test fun editingFishTankCancelsOldTankTasksAndRejectsArchivedTarget() = runBlocking {
+        val oldTank = tank()
+        val newTank = tank()
+        repository.saveTank(oldTank)
+        repository.saveTank(newTank)
+        val fish = fish(oldTank.id)
+        repository.saveFish(fish)
+        val oldTask = CareTask(tankId = oldTank.id, fishId = fish.id, type = CareTaskType.feeding, plannedAt = now + 86_400_000, recurrenceRule = null, notes = null, createdAt = now, updatedAt = now)
+        repository.saveCareTask(oldTask)
+
+        repository.saveFish(fish.copy(tankId = newTank.id, updatedAt = now + 1))
+
+        assertEquals(CareTaskStatus.cancelled, db.care().getTask(oldTask.id)?.status)
+        val move = db.fish().observeEvents(fish.id).first().single { it.type == FishEventType.moved }
+        assertEquals(oldTank.id, move.tankId)
+        assertEquals(newTank.id, move.targetTankId)
+
+        repository.saveTank(oldTank.copy(status = TankStatus.archived))
+        assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.saveFish(fish.copy(tankId = oldTank.id, updatedAt = now + 2)) } }
+        assertEquals(newTank.id, db.fish().get(fish.id)?.tankId)
+    }
+
+    @Test fun newestIndependentGrowthValuesAreQueriedSeparately() = runBlocking {
+        val tank = tank(); repository.saveTank(tank)
+        val fish = fish(tank.id); repository.saveFish(fish)
+        repository.saveGrowthRecord(GrowthRecord(id = "length-record", fishId = fish.id, measuredAt = now, lengthValue = 4.2, lengthUnit = "cm", weightValue = null, weightUnit = null, method = null, photoId = null, notes = null))
+        repository.saveGrowthRecord(GrowthRecord(id = "weight-record", fishId = fish.id, measuredAt = now + 1, lengthValue = null, lengthUnit = null, weightValue = 8.0, weightUnit = "g", method = null, photoId = null, notes = null))
+        assertEquals("length-record", repository.latestLength(fish.id).first()?.id)
+        assertEquals("weight-record", repository.latestWeight(fish.id).first()?.id)
     }
 
     @Test fun growthRecordsRequireAValidMeasurementAndCanBeCorrectedOrDeleted() = runBlocking {
@@ -86,10 +121,13 @@ class LocalRepositoryTest {
     @Test fun unknownDeathDateIsStoredExplicitlyAndCancelsIndividualFutureTask() = runBlocking {
         val tank = tank(); repository.saveTank(tank); val fish = fish(tank.id); repository.saveFish(fish)
         val task = CareTask(tankId = tank.id, fishId = fish.id, type = CareTaskType.feeding, plannedAt = now + 86_400_000, recurrenceRule = null, notes = null, createdAt = now, updatedAt = now)
+        val tankTask = task.copy(id = "tank-wide-task", fishId = null, type = CareTaskType.water_test)
         repository.saveCareTask(task)
+        repository.saveCareTask(tankTask)
         repository.changeFishStatus(fish.id, FishStatus.deceased, null, dateKnown = false)
         val saved = db.fish().get(fish.id)!!
         assertEquals(FishStatus.deceased, saved.status); assertFalse(saved.deathDateKnown); assertEquals(CareTaskStatus.cancelled, db.care().getTask(task.id)?.status)
+        assertEquals(CareTaskStatus.pending, db.care().getTask(tankTask.id)?.status)
         assertFalse(db.fish().observeEvents(fish.id).first().first { it.status == FishStatus.deceased }.dateKnown)
     }
 
@@ -106,6 +144,20 @@ class LocalRepositoryTest {
         }
         migrated.query("SELECT COUNT(*) FROM fish_events").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
         migrated.close()
+    }
+
+    @Test fun versionSevenCareMigrationPreservesOpenTaskAndAddsRuleAndSalinityFields() {
+        val name = "care-migration-7-8"
+        val oldDb = migrationHelper.createDatabase(name, 7)
+        oldDb.execSQL("INSERT INTO tanks (id,name,type,photoId,capacityValue,capacityUnit,capacityIsEstimated,startedAt,equipment,status,notes,createdAt,updatedAt,lengthCm,widthCm,heightCm) VALUES ('legacy-tank','Legacy','saltwater',NULL,NULL,NULL,0,NULL,NULL,'active',NULL,1,1,NULL,NULL,NULL)")
+        oldDb.execSQL("INSERT INTO care_tasks (id,tankId,fishId,type,plannedAt,recurrenceRule,status,notes,createdAt,updatedAt) VALUES ('legacy-task',NULL,NULL,'custom',1000,NULL,'pending','legacy',1,1)")
+        FishDatabase.MIGRATION_7_8.migrate(oldDb)
+        oldDb.query("SELECT status,ruleId,instanceKey,reminderEnabled FROM care_tasks WHERE id='legacy-task'").use { cursor ->
+            assertTrue(cursor.moveToFirst()); assertEquals("pending", cursor.getString(0)); assertTrue(cursor.isNull(1)); assertTrue(cursor.isNull(2)); assertEquals(0, cursor.getInt(3))
+        }
+        oldDb.query("SELECT salinityManagementEnabled FROM tanks WHERE id='legacy-tank'").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
+        oldDb.query("SELECT COUNT(*) FROM care_rules").use { cursor -> assertTrue(cursor.moveToFirst()); assertEquals(0, cursor.getInt(0)) }
+        oldDb.close()
     }
 
     @Test fun foreignKeysRejectOrphansAndFishDeleteCascadesGrowth() = runBlocking {
@@ -291,14 +343,89 @@ class LocalRepositoryTest {
         migrated.close()
     }
 
+    @Test fun versionOneFullUpgradePreservesTankFishGrowthFeedingAndCareHistory() {
+        val name = "full-migration-v1-v8"
+        migrationHelper.createDatabase(name, 1).apply {
+            execSQL("INSERT INTO tanks (id,name,type,photoId,capacityValue,capacityUnit,startedAt,status,notes,createdAt,updatedAt) VALUES ('legacy-tank','Legacy tank','freshwater',NULL,NULL,NULL,NULL,'active',NULL,1,1)")
+            execSQL("INSERT INTO fish (id,tankId,name,species,coverPhotoId,addedAt,birthDate,status,statusChangedAt,notes,createdAt,updatedAt) VALUES ('legacy-fish','legacy-tank','Legacy fish',NULL,NULL,1,NULL,'active',NULL,NULL,1,1)")
+            execSQL("INSERT INTO growth_records (id,fishId,measuredAt,lengthValue,lengthUnit,weightValue,weightUnit,method,photoId,notes) VALUES ('legacy-growth','legacy-fish',2,NULL,NULL,0.0,'g',NULL,NULL,NULL)")
+            execSQL("INSERT INTO feeding_events (id,tankId,fedAt,foodType,amountValue,amountUnit,result,notes) VALUES ('legacy-feed','legacy-tank',3,NULL,NULL,NULL,NULL,NULL)")
+            execSQL("INSERT INTO feeding_targets (id,feedingEventId,targetType,tankId,fishId,result) VALUES ('legacy-target','legacy-feed','fish',NULL,'legacy-fish',NULL)")
+            execSQL("INSERT INTO care_tasks (id,tankId,fishId,type,plannedAt,recurrenceRule,status,notes,createdAt,updatedAt) VALUES ('legacy-task','legacy-tank','legacy-fish','feeding',4,NULL,'pending',NULL,1,1)")
+            execSQL("INSERT INTO care_records (id,taskId,tankId,fishId,type,completedAt,payloadJson,notes) VALUES ('legacy-care','legacy-task','legacy-tank','legacy-fish','feeding',5,NULL,NULL)")
+            close()
+        }
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            name,
+            FishDatabase.VERSION,
+            true,
+            FishDatabase.MIGRATION_1_2,
+            FishDatabase.MIGRATION_2_3,
+            FishDatabase.MIGRATION_3_4,
+            FishDatabase.MIGRATION_4_5,
+            FishDatabase.MIGRATION_5_6,
+            FishDatabase.MIGRATION_6_7,
+            FishDatabase.MIGRATION_7_8,
+        )
+        try {
+            migrated.query("SELECT id FROM tanks WHERE id='legacy-tank'").use { assertTrue(it.moveToFirst()) }
+            migrated.query("SELECT id FROM fish WHERE id='legacy-fish' AND tankId='legacy-tank'").use { assertTrue(it.moveToFirst()) }
+            migrated.query("SELECT id,lengthValue,weightValue FROM growth_records WHERE id='legacy-growth'").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertTrue(cursor.isNull(1)); assertEquals(0.0, cursor.getDouble(2), 0.0)
+            }
+            migrated.query("SELECT COUNT(*) FROM feeding_events JOIN feeding_targets ON feeding_targets.feedingEventId=feeding_events.id WHERE feeding_events.id='legacy-feed' AND feeding_targets.fishId='legacy-fish'").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals(1, cursor.getInt(0))
+            }
+            migrated.query("SELECT status,reminderEnabled FROM care_tasks WHERE id='legacy-task'").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("pending", cursor.getString(0)); assertEquals(0, cursor.getInt(1))
+            }
+            migrated.query("SELECT taskId,fishId FROM care_records WHERE id='legacy-care'").use { cursor ->
+                assertTrue(cursor.moveToFirst()); assertEquals("legacy-task", cursor.getString(0)); assertEquals("legacy-fish", cursor.getString(1))
+            }
+            migrated.query("PRAGMA foreign_key_check").use { assertFalse("Migration introduced foreign-key violations", it.moveToFirst()) }
+        } finally {
+            migrated.close()
+        }
+    }
+
+    @Test fun failedMigrationRollsBackSchemaAndPreservesOriginalRows() {
+        val name = "failed-migration-preserves-data"
+        migrationHelper.createDatabase(name, 1).apply {
+            execSQL("INSERT INTO tanks (id,name,type,photoId,capacityValue,capacityUnit,startedAt,status,notes,createdAt,updatedAt) VALUES ('protected-tank','Protected tank','freshwater',NULL,NULL,NULL,NULL,'active',NULL,1,1)")
+            close()
+        }
+        val failingMigration = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tanks ADD COLUMN injectedFailure TEXT")
+                throw SQLiteException("Injected migration failure")
+            }
+        }
+        assertThrows(SQLiteException::class.java) {
+            migrationHelper.runMigrationsAndValidate(name, 2, true, failingMigration)
+        }
+
+        SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+            db.rawQuery("PRAGMA user_version", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+            }
+            db.rawQuery("SELECT name FROM tanks WHERE id='protected-tank'", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("Protected tank", cursor.getString(0))
+            }
+            db.rawQuery("PRAGMA table_info(tanks)", null).use { cursor ->
+                while (cursor.moveToNext()) assertNotEquals("injectedFailure", cursor.getString(1))
+            }
+        }
+    }
+
     @Test fun versionTwoMigrationAddsTankFieldsWithoutReplacingExistingRows() {
         val name = "tank-migration-test"
         migrationHelper.createDatabase(name, 2).apply {
             execSQL("INSERT INTO tanks (id, name, type, photoId, capacityValue, capacityUnit, startedAt, status, notes, createdAt, updatedAt) VALUES ('tank-1', 'Old tank', 'freshwater', NULL, 20, 'L', NULL, 'active', NULL, 1, 1)")
             close()
         }
-        val migrated = migrationHelper.createDatabase(name, 2)
-        FishDatabase.MIGRATION_2_3.migrate(migrated)
+        val migrated = migrationHelper.runMigrationsAndValidate(name, 3, true, FishDatabase.MIGRATION_2_3)
         migrated.query("SELECT name, capacityValue, lengthCm, equipment FROM tanks WHERE id = 'tank-1'").use { cursor ->
             assertTrue(cursor.moveToFirst())
             assertEquals("Old tank", cursor.getString(0))
