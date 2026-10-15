@@ -32,6 +32,8 @@ class FishViewModel(application: Application) : AndroidViewModel(application) {
     fun summary(id: String) = dayBounds().let { (start, end) -> repository.fishSummary(id, start, end) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     fun events(id: String) = repository.fishEvents(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun growth(id: String) = repository.growthRecords(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    fun latestLength(id: String) = repository.latestLength(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    fun latestWeight(id: String) = repository.latestWeight(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     fun saveGrowth(value: GrowthRecord, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.saveGrowthRecord(value) }
     fun deleteGrowth(id: String, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.deleteGrowthRecord(id) }
     fun feedings(id: String, tankId: String) = repository.feedingsForFish(id, tankId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -40,13 +42,12 @@ class FishViewModel(application: Application) : AndroidViewModel(application) {
         val growth = if (length != null || weight != null) GrowthRecord(fishId = value.id, measuredAt = value.addedAt, lengthValue = length, lengthUnit = length?.let { "cm" }, weightValue = weight, weightUnit = weight?.let { "g" }, method = null, photoId = null, notes = null) else null
         repository.saveFish(value, growth)
     }
-    fun move(id: String, tankId: String, date: Long, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.moveFish(id, tankId, date) }
-    fun setStatus(id: String, status: FishStatus, date: Long?, dateKnown: Boolean = true, onSaved: () -> Unit = {}, onError: (String) -> Unit = {}) = run(onSaved, onError) { repository.changeFishStatus(id, status, date, dateKnown) }
-    fun archive(id: String, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.archiveFish(id) }
+    fun move(id: String, tankId: String, date: Long, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.moveFish(id, tankId, date); CareNotificationScheduler.sync(getApplication()) }
+    fun setStatus(id: String, status: FishStatus, date: Long?, dateKnown: Boolean = true, onSaved: () -> Unit = {}, onError: (String) -> Unit = {}) = run(onSaved, onError) { repository.changeFishStatus(id, status, date, dateKnown); CareNotificationScheduler.sync(getApplication()) }
+    fun archive(id: String, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.archiveFish(id); CareNotificationScheduler.sync(getApplication()) }
     private fun run(onSaved: () -> Unit, onError: (String) -> Unit, action: suspend () -> Unit) = viewModelScope.launch {
         try { action(); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "操作失败") }
     }
-    override fun onCleared() { database.close() }
     companion object {
         fun factory(application: Application) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")

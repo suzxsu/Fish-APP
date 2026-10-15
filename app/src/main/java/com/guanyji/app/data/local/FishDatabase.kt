@@ -59,8 +59,10 @@ interface FishDao {
     @Query("SELECT * FROM fish WHERE id = :id") suspend fun get(id: String): Fish?
     @androidx.room.Update suspend fun update(value: Fish)
     @Query("SELECT * FROM fish ORDER BY createdAt DESC") fun observeAllRaw(): Flow<List<Fish>>
+    @Query("SELECT * FROM fish ORDER BY createdAt DESC") fun observeAllRecords(): Flow<List<Fish>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertEvent(value: FishEvent)
     @Query("SELECT * FROM fish_events WHERE fishId = :fishId ORDER BY occurredAt DESC") fun observeEvents(fishId: String): Flow<List<FishEvent>>
+    @Query("SELECT * FROM fish_events ORDER BY occurredAt") fun observeAllEvents(): Flow<List<FishEvent>>
     @Query("UPDATE fish SET tankId = :tankId, updatedAt = :updatedAt WHERE id = :fishId") suspend fun move(fishId: String, tankId: String, updatedAt: Long)
     @Query("UPDATE fish SET status = :status, statusChangedAt = :changedAt, deathDateKnown = CASE WHEN :status = 'deceased' THEN :dateKnown ELSE 1 END, deathDate = :deathDate, updatedAt = :updatedAt WHERE id = :fishId") suspend fun setStatus(fishId: String, status: FishStatus, changedAt: Long?, dateKnown: Boolean, deathDate: Long?, updatedAt: Long)
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: Fish)
@@ -91,12 +93,14 @@ data class PhotoReferenceCounts(val tankCovers: Int, val fishCovers: Int, val gr
 
 @Dao
 interface GrowthRecordDao {
+    @Query("SELECT * FROM growth_records ORDER BY measuredAt") fun observeAll(): Flow<List<GrowthRecord>>
     @Query("SELECT * FROM growth_records WHERE fishId = :fishId ORDER BY measuredAt DESC") fun observeForFish(fishId: String): Flow<List<GrowthRecord>>
     @Query("SELECT * FROM growth_records WHERE id = :id") suspend fun get(id: String): GrowthRecord?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: GrowthRecord)
     @androidx.room.Update suspend fun update(value: GrowthRecord)
     @Query("DELETE FROM growth_records WHERE id = :id") suspend fun delete(id: String): Int
     @Query("SELECT * FROM growth_records WHERE fishId = :fishId AND lengthValue IS NOT NULL ORDER BY measuredAt DESC LIMIT 1") fun latestLength(fishId: String): Flow<GrowthRecord?>
+    @Query("SELECT * FROM growth_records WHERE fishId = :fishId AND weightValue IS NOT NULL ORDER BY measuredAt DESC LIMIT 1") fun latestWeight(fishId: String): Flow<GrowthRecord?>
 }
 
 data class FeedingEventWithTargets(
@@ -106,6 +110,9 @@ data class FeedingEventWithTargets(
 
 @Dao
 interface FeedingDao {
+    @Transaction
+    @Query("SELECT * FROM feeding_events ORDER BY fedAt")
+    fun observeAll(): Flow<List<FeedingEventWithTargets>>
     @Transaction
     @Query("SELECT * FROM feeding_events WHERE tankId = :tankId ORDER BY fedAt DESC")
     fun observeForTank(tankId: String): Flow<List<FeedingEventWithTargets>>
@@ -137,6 +144,9 @@ data class WaterTestWithValues(
 @Dao
 interface WaterTestDao {
     @Transaction
+    @Query("SELECT * FROM water_tests ORDER BY measuredAt")
+    fun observeAll(): Flow<List<WaterTestWithValues>>
+    @Transaction
     @Query("SELECT * FROM water_tests WHERE tankId = :tankId ORDER BY measuredAt DESC")
     fun observeForTank(tankId: String): Flow<List<WaterTestWithValues>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTest(test: WaterTest)
@@ -145,6 +155,7 @@ interface WaterTestDao {
 
 @Dao
 interface WaterChangeDao {
+    @Query("SELECT * FROM water_changes ORDER BY completedAt") fun observeAll(): Flow<List<WaterChange>>
     @Query("SELECT * FROM water_changes WHERE tankId = :tankId ORDER BY completedAt DESC") fun observeForTank(tankId: String): Flow<List<WaterChange>>
     @Query("SELECT * FROM water_changes WHERE id = :id") suspend fun get(id: String): WaterChange?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: WaterChange)
@@ -154,14 +165,26 @@ interface WaterChangeDao {
 @Dao
 interface CareDao {
     @Query("SELECT * FROM care_tasks ORDER BY plannedAt") fun observeTasks(): Flow<List<CareTask>>
+    @Query("SELECT * FROM care_tasks ORDER BY plannedAt") fun observeAllTasks(): Flow<List<CareTask>>
+    @Query("SELECT * FROM care_tasks") suspend fun allTasks(): List<CareTask>
+    @Query("SELECT * FROM care_tasks WHERE id = :id") suspend fun getTask(id: String): CareTask?
+    @Query("SELECT * FROM care_tasks WHERE plannedAt >= :from AND plannedAt < :to ORDER BY plannedAt") fun observeTasksBetween(from: Long, to: Long): Flow<List<CareTask>>
+    @Query("SELECT * FROM care_records ORDER BY completedAt DESC") fun observeAllRecords(): Flow<List<CareRecord>>
     @Query("SELECT * FROM care_tasks WHERE tankId = :tankId ORDER BY plannedAt") fun observeTasksForTank(tankId: String): Flow<List<CareTask>>
-    @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE tankId = :tankId AND status IN ('pending', 'overdue')") suspend fun cancelPendingForTank(tankId: String, updatedAt: Long)
-    @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND (fishId = :fishId OR (fishId IS NULL AND tankId = :tankId))") suspend fun cancelPendingForFish(fishId: String, tankId: String, updatedAt: Long)
+    @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND (tankId = :tankId OR fishId IN (SELECT id FROM fish WHERE tankId = :tankId))") suspend fun cancelPendingForTank(tankId: String, updatedAt: Long)
+    @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND fishId = :fishId") suspend fun cancelPendingForFish(fishId: String, updatedAt: Long)
+    @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND type = 'salinity_test' AND (tankId = :tankId OR fishId IN (SELECT id FROM fish WHERE tankId = :tankId))") suspend fun cancelSalinityTasks(tankId: String, updatedAt: Long)
     @Query("SELECT * FROM care_records WHERE tankId = :tankId ORDER BY completedAt DESC") fun observeRecords(tankId: String): Flow<List<CareRecord>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTask(value: CareTask)
+    @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertRule(value: CareRule)
+    @androidx.room.Update suspend fun updateRule(value: CareRule)
+    @Query("SELECT * FROM care_rules WHERE id = :id") suspend fun getRule(id: String): CareRule?
+    @Query("SELECT * FROM care_rules WHERE enabled = 1") suspend fun enabledRules(): List<CareRule>
+    @Query("SELECT * FROM care_rules") suspend fun allRules(): List<CareRule>
+    @Query("SELECT * FROM care_tasks WHERE ruleId = :ruleId AND status IN ('pending','overdue') ORDER BY plannedAt") suspend fun openTasksForRule(ruleId: String): List<CareTask>
+    @Query("SELECT * FROM care_tasks WHERE ruleId = :ruleId AND instanceKey = :key LIMIT 1") suspend fun getRuleInstance(ruleId: String, key: String): CareTask?
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertRecord(value: CareRecord)
     @Query("UPDATE care_tasks SET status = :status, updatedAt = :updatedAt WHERE id = :id AND status IN ('pending', 'overdue')") suspend fun setOpenTaskStatus(id: String, status: CareTaskStatus, updatedAt: Long): Int
-    @Query("SELECT * FROM care_tasks WHERE id = :id") suspend fun getTask(id: String): CareTask?
     @Query("SELECT * FROM care_tasks WHERE notes = :marker ORDER BY createdAt DESC LIMIT 1") suspend fun getTaskForWaterChangeMarker(marker: String): CareTask?
     @androidx.room.Update suspend fun updateTask(value: CareTask)
 }
@@ -174,8 +197,8 @@ interface SettingDao {
 }
 
 @Database(
-    entities = [Tank::class, Fish::class, FishEvent::class, Photo::class, GrowthRecord::class, FeedingEvent::class, FeedingTarget::class, CommonFood::class, WaterTest::class, WaterTestValue::class, WaterChange::class, CareTask::class, CareRecord::class, AppSetting::class],
-    version = 7,
+    entities = [Tank::class, Fish::class, FishEvent::class, Photo::class, GrowthRecord::class, FeedingEvent::class, FeedingTarget::class, CommonFood::class, WaterTest::class, WaterTestValue::class, WaterChange::class, CareTask::class, CareRule::class, CareRecord::class, AppSetting::class],
+    version = 8,
     exportSchema = true,
 )
 @TypeConverters(DatabaseConverters::class)
@@ -193,7 +216,22 @@ abstract class FishDatabase : RoomDatabase() {
     abstract fun settings(): SettingDao
 
     companion object {
-        const val VERSION = 7
+        const val VERSION = 8
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN ruleId TEXT")
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN instanceKey TEXT")
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN reminderEnabled INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN postponedFrom INTEGER")
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN lastPostponedAt INTEGER")
+                db.execSQL("ALTER TABLE care_tasks ADD COLUMN customTitle TEXT")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_care_tasks_ruleId_instanceKey ON care_tasks(ruleId, instanceKey)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS care_rules (id TEXT NOT NULL, tankId TEXT, fishId TEXT, type TEXT NOT NULL, intervalDays INTEGER NOT NULL, localHour INTEGER NOT NULL, localMinute INTEGER NOT NULL, timeZoneId TEXT NOT NULL, notes TEXT, reminderEnabled INTEGER NOT NULL, enabled INTEGER NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, customTitle TEXT, PRIMARY KEY(id))")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_care_rules_tankId ON care_rules(tankId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_care_rules_fishId ON care_rules(fishId)")
+                db.execSQL("ALTER TABLE tanks ADD COLUMN salinityManagementEnabled INTEGER NOT NULL DEFAULT 0")
+            }
+        }
         val MIGRATION_6_7: Migration = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE water_changes ADD COLUMN beforeTemperature REAL")

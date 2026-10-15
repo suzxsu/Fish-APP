@@ -10,4 +10,11 @@ class TankCalculationsTest {
         assertNull(estimateTankCapacityLiters(0.0, 40.0, 30.0))
         assertNull(estimateTankCapacityLiters(Double.POSITIVE_INFINITY, 40.0, 30.0))
     }
+
+    @Test fun waterChangeRatioNormalizesUnitsAndLeavesUnknownOrImpossibleRatiosEmpty() {
+        assertEquals(10.0, calculateWaterChangeRatioPercent(10.0, "L", 100.0, "L")!!, 0.0001)
+        assertEquals(10.0, calculateWaterChangeRatioPercent(1.0, "gal", 37.85411784, "L")!!, 0.0001)
+        assertNull(calculateWaterChangeRatioPercent(10.0, "L", null, null))
+        assertNull(calculateWaterChangeRatioPercent(101.0, "L", 100.0, "L"))
+    }
 }

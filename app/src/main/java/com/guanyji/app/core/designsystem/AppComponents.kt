@@ -23,12 +23,15 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 }
 
 @Composable
-fun PageTitle(title: String, subtitle: String? = null) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 18.dp)) {
+fun PageTitle(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+      if (onBack != null) androidx.compose.material3.TextButton(onClick = onBack) { Text("返回") }
+      Column(Modifier.weight(1f)) {
         Text(title, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onBackground)
         subtitle?.let {
             Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+      }
     }
 }
 

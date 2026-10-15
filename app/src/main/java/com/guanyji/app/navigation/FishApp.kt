@@ -25,12 +25,28 @@ import com.guanyji.app.feature.fish.FishFormScreen
 import com.guanyji.app.feature.fish.FishDetailScreen
 import com.guanyji.app.feature.fish.FishRecordsScreen
 import com.guanyji.app.feature.feeding.FeedingScreen
+import com.guanyji.app.feature.care.CareScreen
+import com.guanyji.app.feature.overview.OverviewScreen
+import com.guanyji.app.feature.profile.ProfileScreen
+import com.guanyji.app.feature.profile.SettingsScreen
+import com.guanyji.app.feature.profile.AboutHelpScreen
+import com.guanyji.app.feature.statistics.StatisticsScreen
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 
 @Composable
-fun FishApp() {
+fun FishApp(openCareTaskId: String? = null, onCareTaskOpened: () -> Unit = {}) {
     val navController = rememberNavController()
+    var overviewMessage by remember { mutableStateOf<String?>(null) }
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+    LaunchedEffect(openCareTaskId) {
+        if (openCareTaskId != null) navController.navigate(AppDestination.Care.route) { launchSingleTop = true }
+    }
 
     Scaffold(
         bottomBar = {
@@ -38,7 +54,7 @@ fun FishApp() {
                 AppDestination.entries.forEach { destination ->
                     NavigationBarItem(
                         modifier = Modifier.testTag("destination-${destination.route}"),
-                        selected = currentRoute == destination.route || (destination == AppDestination.Tanks && currentRoute?.startsWith("tank/") == true),
+                        selected = currentRoute == destination.route || (destination == AppDestination.Tanks && currentRoute?.startsWith("tank/") == true) || (destination == AppDestination.Profile && currentRoute in setOf("statistics", "settings", "about")),
                         onClick = {
                             navController.navigate(destination.route) {
                                 popUpTo(navController.graph.findStartDestination().id) {
@@ -73,7 +89,22 @@ fun FishApp() {
                             onCreate = { navController.navigate("tank/create") },
                             onOpen = { navController.navigate("tank/detail/$it") },
                         )
-                    } else if (destination == AppDestination.Overview) PageShell(destination, onQuickFeeding = { navController.navigate("feeding?tankId=null&fishId=null") }) else PageShell(destination)
+                    } else if (destination == AppDestination.Care) CareScreen(openCareTaskId, onCareTaskOpened)
+                    else if (destination == AppDestination.Profile) ProfileScreen(
+                        onStatistics = { navController.navigate("statistics") },
+                        onSettings = { navController.navigate("settings") },
+                        onAbout = { navController.navigate("about") },
+                    )
+                    else if (destination == AppDestination.Overview) OverviewScreen(
+                        onAddTank = { navController.navigate("tank/create") },
+                        onAddFish = { navController.navigate("fish/create") },
+                        onFeeding = { navController.navigate("feeding?tankId=null&fishId=null") },
+                        onWater = { tankId -> if (tankId == null) navController.navigate(AppDestination.Tanks.route) else navController.navigate("tank/action/$tankId/water") },
+                        onTank = { navController.navigate("tank/detail/$it") },
+                        onFish = { navController.navigate("fish/detail/$it") },
+                        onCare = { taskId -> navController.navigate(AppDestination.Care.route) },
+                        onMessage = { overviewMessage = it },
+                    ) else PageShell(destination)
                 }
             }
             composable("tank/create") {
@@ -126,6 +157,17 @@ fun FishApp() {
                 val selectedFish = entry.arguments?.getString("fishId")?.takeUnless { it == "null" }
                 FeedingScreen(selectedTank, selectedFish, onBack = { navController.popBackStack() })
             }
+            composable("statistics") {
+                StatisticsScreen(onBack = { navController.popBackStack() }, onAddRecord = { action, tankId ->
+                    if (action == "growth") navController.navigate(AppDestination.Fish.route)
+                    else if (tankId == null) navController.navigate(AppDestination.Tanks.route)
+                    else if (action == "feeding") navController.navigate("tank/action/$tankId/feeding")
+                    else navController.navigate("tank/action/$tankId/$action")
+                })
+            }
+            composable("settings") { SettingsScreen(onBack = { navController.popBackStack() }, onAbout = { navController.navigate("about") }) }
+            composable("about") { AboutHelpScreen(onBack = { navController.popBackStack() }) }
         }
     }
+    overviewMessage?.let { message -> AlertDialog(onDismissRequest = { overviewMessage = null }, text = { Text(message) }, confirmButton = { TextButton(onClick = { overviewMessage = null }) { Text("知道了") } }) }
 }
