@@ -90,7 +90,7 @@ fun OverviewScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(DashboardTokens.PageBackground)
-            .verticalScroll(rememberScrollState())
+            .verticalScroll(androidx.compose.foundation.rememberScrollState())
             .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(DashboardTokens.SectionGap),
     ) {
@@ -182,7 +182,7 @@ fun OverviewScreen(
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         recentEntries.take(3).chunked(2).forEach { row ->
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                                row.forEach { entry -> RecordChipCard(entry, Modifier.weight(1f), vm) }
+                                row.forEach { entry -> RecordChipCard(entry, Modifier.weight(1f), vm, onRecordGrowth) }
                                 if (row.size == 1) Spacer(Modifier.weight(1f))
                             }
                         }
@@ -216,7 +216,8 @@ fun OverviewScreen(
 
 @Composable
 private fun DashboardHeader(badgeCount: Int, onNotifications: () -> Unit) {
-    Box(modifier = Modifier.fillMaxWidth().height(HeaderHeight), contentAlignment = Alignment.TopStart) {
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    Box(modifier = Modifier.fillMaxWidth().height(HeaderHeight + statusBarInset), contentAlignment = Alignment.TopStart) {
         SubcomposeAsyncImage(
             model = ImageRequest.Builder(LocalContext.current).data(R.drawable.dashboard_header_reef).crossfade(320).build(),
             contentDescription = "水族主题背景：珊瑚礁中的小丑鱼",
@@ -238,7 +239,7 @@ private fun DashboardHeader(badgeCount: Int, onNotifications: () -> Unit) {
             ),
         )
         Column(
-            modifier = Modifier.fillMaxWidth().padding(start = ScreenPadding + 2.dp, end = 12.dp, top = 26.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = ScreenPadding + 2.dp, end = 12.dp, top = statusBarInset + 26.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
@@ -259,7 +260,7 @@ private fun DashboardHeader(badgeCount: Int, onNotifications: () -> Unit) {
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(top = 24.dp, end = ScreenPadding)
+                .padding(top = statusBarInset + 24.dp, end = ScreenPadding)
                 .size(40.dp)
                 .clip(CircleShape)
                 .background(Color(0x4DFFFFFF))
@@ -582,6 +583,7 @@ internal data class DashboardRecord(
     val at: Long,
     val photoId: String?,
     val photoThumbnail: Boolean,
+    val fishId: String? = null,
 )
 
 private fun recordIcon(kind: RecordKind): ImageVector = when (kind) {
@@ -597,10 +599,12 @@ private fun recordAccent(kind: RecordKind): Color = when (kind) {
 }
 
 @Composable
-private fun RecordChipCard(entry: DashboardRecord, modifier: Modifier = Modifier, vm: OverviewViewModel? = null) {
+private fun RecordChipCard(entry: DashboardRecord, modifier: Modifier = Modifier, vm: OverviewViewModel? = null, onOpenGrowth: (String) -> Unit = {}) {
     val accent = recordAccent(entry.kind)
     ElevatedCard(
-        modifier = modifier.dashboardCardBorder(1.dp),
+        modifier = modifier.dashboardCardBorder(1.dp).then(
+            if (entry.kind == RecordKind.growth && entry.fishId != null) Modifier.clickable(onClickLabel = "查看成长记录") { onOpenGrowth(entry.fishId) } else Modifier,
+        ),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.elevatedCardColors(containerColor = DashboardTokens.SurfaceCard),
         elevation = CardDefaults.elevatedCardElevation(defaultElevation = 1.dp),
@@ -743,6 +747,7 @@ private fun buildRecentEntries(overview: OverviewSnapshot, fishRows: List<FishSu
             at = latestGrowth.measuredAt,
             photoId = fish?.fish?.coverPhotoId,
             photoThumbnail = true,
+            fishId = fish?.fish?.id ?: latestGrowth.fishId,
         )
     } else {
         val fallback = fishRows.filter { it.fish.status in setOf(FishStatus.active, FishStatus.quarantine) }.maxByOrNull { it.fish.addedAt }
@@ -755,6 +760,7 @@ private fun buildRecentEntries(overview: OverviewSnapshot, fishRows: List<FishSu
                 at = fallback.fish.addedAt,
                 photoId = fallback.fish.coverPhotoId,
                 photoThumbnail = true,
+                fishId = fallback.fish.id,
             )
         }
     }

@@ -22,6 +22,61 @@ enum class AppDestination(
     Profile("profile", "我的", Icons.Outlined.Person, "我的", "统计、设置、备份与关于。"),
 }
 
+internal fun AppDestination.matchesRoute(route: String?): Boolean = route?.let(::topLevelOwner) == this
+
+internal val registeredAppRoutes = listOf(
+    AppDestination.Overview.route,
+    AppDestination.Fish.route,
+    AppDestination.Tanks.route,
+    AppDestination.Care.route,
+    "care?view={view}",
+    AppDestination.Profile.route,
+    "tank/create",
+    "fish/create?tankId={tankId}",
+    "fish/edit/{fishId}",
+    "fish/detail/{fishId}",
+    "fish/records/{fishId}/{section}",
+    "tank/edit/{tankId}",
+    "tank/detail/{tankId}",
+    "tank/action/{tankId}/{action}",
+    "tank/action/{tankId}/change/{changeId}",
+    "feeding?tankId={tankId}&fishId={fishId}",
+    "statistics",
+    "settings?section={section}",
+    "about",
+    "about/{section}",
+    "navigation/unknown",
+)
+
+internal fun topLevelOwner(routePattern: String): AppDestination? = when (routePattern) {
+    "overview" -> AppDestination.Overview
+    "fish", "fish/create?tankId={tankId}", "fish/edit/{fishId}", "fish/detail/{fishId}", "fish/records/{fishId}/{section}" -> AppDestination.Fish
+    "tanks", "tank/create", "tank/edit/{tankId}", "tank/detail/{tankId}", "tank/action/{tankId}/{action}", "tank/action/{tankId}/change/{changeId}" -> AppDestination.Tanks
+    "care", "care?view={view}", "care?view=" -> AppDestination.Care
+    "profile", "statistics", "settings?section={section}", "about", "about/{section}" -> AppDestination.Profile
+    "feeding?tankId={tankId}&fishId={fishId}", "navigation/unknown" -> null
+    else -> null
+}
+
+internal fun isKnownRoute(routePattern: String): Boolean = routePattern in registeredAppRoutes
+
+private fun encodeRoutePart(value: String): String = java.net.URLEncoder.encode(value, Charsets.UTF_8.name())
+    .replace("+", "%20")
+
+internal fun feedingRoute(tankId: String? = null, fishId: String? = null): String = buildList {
+    tankId?.let { add("tankId=${encodeRoutePart(it)}") }
+    fishId?.let { add("fishId=${encodeRoutePart(it)}") }
+}.joinToString(prefix = "feeding?", separator = "&").removeSuffix("?")
+
+internal fun fishCreateRoute(tankId: String? = null): String =
+    tankId?.let { "fish/create?tankId=${encodeRoutePart(it)}" } ?: "fish/create"
+
+internal fun careRoute(view: String? = null): String =
+    view?.let { "care?view=${encodeRoutePart(it)}" } ?: "care"
+
+internal fun fishRecordsRoute(fishId: String, section: String): String =
+    "fish/records/${encodeRoutePart(fishId)}/${encodeRoutePart(section)}"
+
 /**
  * 底部导航使用的水族主题图标。
  * 保留 [AppDestination.icon] 作为原有字段与默认图标，仅底部导航切换到统一线条风格的图标。

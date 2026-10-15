@@ -56,6 +56,7 @@ interface FishDao {
     @Query("SELECT fish.*, (SELECT MAX(measuredAt) FROM growth_records WHERE growth_records.fishId = fish.id AND lengthValue IS NOT NULL) AS lastMeasuredAt, (SELECT lengthValue FROM growth_records WHERE growth_records.fishId = fish.id AND lengthValue IS NOT NULL ORDER BY measuredAt DESC LIMIT 1) AS lastLength, (SELECT lengthUnit FROM growth_records WHERE growth_records.fishId = fish.id AND lengthValue IS NOT NULL ORDER BY measuredAt DESC LIMIT 1) AS lastLengthUnit, (SELECT COUNT(*) FROM feeding_events JOIN feeding_targets ON feeding_targets.feedingEventId = feeding_events.id WHERE feeding_events.fedAt >= :dayStart AND feeding_events.fedAt < :dayEnd AND (feeding_targets.fishId = fish.id OR (feeding_targets.targetType = 'tank' AND feeding_targets.tankId = fish.tankId))) AS todayFeedings FROM fish WHERE fish.id = :id") fun observeSummary(id: String, dayStart: Long, dayEnd: Long): Flow<FishSummary?>
     @Query("SELECT * FROM fish WHERE tankId = :tankId ORDER BY addedAt DESC") fun observeForTank(tankId: String): Flow<List<Fish>>
     @Query("SELECT COUNT(*) FROM fish WHERE tankId = :tankId AND status IN ('active', 'quarantine')") suspend fun countActiveForTank(tankId: String): Int
+    @Query("SELECT * FROM fish WHERE tankId = :tankId AND status IN ('active', 'quarantine')") suspend fun activeForTank(tankId: String): List<Fish>
     @Query("SELECT * FROM fish WHERE id = :id") suspend fun get(id: String): Fish?
     @androidx.room.Update suspend fun update(value: Fish)
     @Query("SELECT * FROM fish ORDER BY createdAt DESC") fun observeAllRaw(): Flow<List<Fish>>
@@ -64,7 +65,7 @@ interface FishDao {
     @Query("SELECT * FROM fish_events WHERE fishId = :fishId ORDER BY occurredAt DESC") fun observeEvents(fishId: String): Flow<List<FishEvent>>
     @Query("SELECT * FROM fish_events ORDER BY occurredAt") fun observeAllEvents(): Flow<List<FishEvent>>
     @Query("UPDATE fish SET tankId = :tankId, updatedAt = :updatedAt WHERE id = :fishId") suspend fun move(fishId: String, tankId: String, updatedAt: Long)
-    @Query("UPDATE fish SET status = :status, statusChangedAt = :changedAt, deathDateKnown = CASE WHEN :status = 'deceased' THEN :dateKnown ELSE 1 END, deathDate = :deathDate, updatedAt = :updatedAt WHERE id = :fishId") suspend fun setStatus(fishId: String, status: FishStatus, changedAt: Long?, dateKnown: Boolean, deathDate: Long?, updatedAt: Long)
+    @Query("UPDATE fish SET status = :status, statusChangedAt = :changedAt, deathDateKnown = CASE WHEN :status = 'deceased' THEN :dateKnown ELSE 1 END, deathDate = :deathDate, updatedAt = :updatedAt WHERE id = :fishId") suspend fun setStatus(fishId: String, status: FishStatus, changedAt: Long?, dateKnown: Boolean, deathDate: Long?, updatedAt: Long): Int
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(value: Fish)
     @Query("DELETE FROM fish WHERE id = :id") suspend fun delete(id: String)
 }
@@ -174,6 +175,7 @@ interface CareDao {
     @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND (tankId = :tankId OR fishId IN (SELECT id FROM fish WHERE tankId = :tankId))") suspend fun cancelPendingForTank(tankId: String, updatedAt: Long)
     @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND fishId = :fishId") suspend fun cancelPendingForFish(fishId: String, updatedAt: Long)
     @Query("UPDATE care_tasks SET status = 'cancelled', updatedAt = :updatedAt WHERE status IN ('pending', 'overdue') AND type = 'salinity_test' AND (tankId = :tankId OR fishId IN (SELECT id FROM fish WHERE tankId = :tankId))") suspend fun cancelSalinityTasks(tankId: String, updatedAt: Long)
+    @Query("UPDATE care_rules SET enabled = 0, updatedAt = :updatedAt WHERE enabled = 1 AND (tankId = :tankId OR fishId IN (SELECT id FROM fish WHERE tankId = :tankId))") suspend fun disableRulesForTank(tankId: String, updatedAt: Long)
     @Query("SELECT * FROM care_records WHERE tankId = :tankId ORDER BY completedAt DESC") fun observeRecords(tankId: String): Flow<List<CareRecord>>
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertTask(value: CareTask)
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insertRule(value: CareRule)

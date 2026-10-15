@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -77,7 +78,7 @@ fun FeedingScreen(
     val leaveForm = rememberLeaveFormHandler(hasUnsavedChanges, onBack)
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text(if (editing == null) "喂食记录" else "编辑喂食") }, navigationIcon = { IconButton(onClick = leaveForm) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } }) },
+        topBar = { TopAppBar(title = { Text(if (editing == null) "喂食记录" else "编辑喂食", modifier = Modifier.testTag("feeding-screen-title")) }, navigationIcon = { IconButton(onClick = leaveForm) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回") } }) },
         bottomBar = { Surface(shadowElevation = 4.dp) { Button(enabled = !saving && tank != null, onClick = {
             if (saving) return@Button
             val cleanFood = food.trim()

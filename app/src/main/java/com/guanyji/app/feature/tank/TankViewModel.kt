@@ -13,6 +13,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,7 +31,18 @@ class TankViewModel(application: Application) : AndroidViewModel(application) {
         try { repository.archiveTank(id, System.currentTimeMillis(), confirmedWithFish); CareNotificationScheduler.sync(getApplication()); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "归档失败") }
     }
 
-    fun summary(id: String?) = (id?.let(repository::tankSummary) ?: flowOf(null)).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    sealed interface SummaryState {
+        data object Loading : SummaryState
+        data class Found(val summary: TankSummary) : SummaryState
+        data object Missing : SummaryState
+        data class Failed(val message: String) : SummaryState
+    }
+
+    fun summary(id: String?): kotlinx.coroutines.flow.StateFlow<SummaryState> =
+        (id?.takeIf(String::isNotBlank)?.let(repository::tankSummary) ?: flowOf(null))
+            .map<TankSummary?, SummaryState> { it?.let(SummaryState::Found) ?: SummaryState.Missing }
+            .catch { emit(SummaryState.Failed(it.message ?: "鱼缸加载失败")) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SummaryState.Loading)
     fun fish(id: String) = repository.fishInTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun tests(id: String) = repository.waterTestsForTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun changes(id: String) = repository.waterChangesForTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

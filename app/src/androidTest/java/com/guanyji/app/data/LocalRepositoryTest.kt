@@ -436,18 +436,62 @@ class LocalRepositoryTest {
         migrated.close()
     }
 
-    @Test fun archiveKeepsFishAndHistoryButCancelsOpenTankTasks() = runBlocking {
+    @Test fun archiveSynchronizesEligibleFishKeepsOtherStatusesAndHistoryAndDisablesFutureCare() = runBlocking {
         val tank = tank()
+        val destination = tank()
         repository.saveTank(tank)
-        val fish = fish(tank.id)
-        repository.saveFish(fish)
-        val task = CareTask(tankId = tank.id, fishId = null, type = CareTaskType.water_test, plannedAt = now, recurrenceRule = null, notes = null, createdAt = now, updatedAt = now)
+        repository.saveTank(destination)
+        val active = fish(tank.id)
+        val quarantine = fish(tank.id).copy(status = FishStatus.quarantine)
+        val transferred = fish(tank.id).copy(status = FishStatus.transferred)
+        val deceased = fish(tank.id).copy(status = FishStatus.deceased)
+        val archived = fish(tank.id).copy(status = FishStatus.archived)
+        val moved = fish(tank.id)
+        listOf(active, quarantine, transferred, deceased, archived, moved).forEach { repository.saveFish(it) }
+        repository.moveFish(moved.id, destination.id, now)
+        val growth = GrowthRecord(fishId = active.id, measuredAt = now, lengthValue = 5.0, lengthUnit = "cm", weightValue = null, weightUnit = null, method = null, photoId = null, notes = null)
+        repository.saveGrowthRecord(growth)
+        val feeding = FeedingEvent(tankId = tank.id, fedAt = now, foodType = null, amountValue = null, amountUnit = null, result = null, notes = null)
+        repository.saveFeeding(feeding, listOf(FeedingTarget(feedingEventId = feeding.id, targetType = FeedingTargetType.fish, tankId = null, fishId = active.id, result = null)))
+        val task = CareTask(tankId = tank.id, fishId = null, type = CareTaskType.water_test, plannedAt = now + 86_400_000, recurrenceRule = null, notes = null, createdAt = now, updatedAt = now)
         repository.saveCareTask(task)
+        val completed = task.copy(id = "completed-tank-task", plannedAt = now - 1_000, status = CareTaskStatus.completed)
+        repository.saveCareTask(completed)
+        val rule = CareRule(id = "tank-rule", tankId = tank.id, fishId = null, type = CareTaskType.water_test, intervalDays = 7, localHour = 9, localMinute = 0, timeZoneId = "UTC", notes = null, reminderEnabled = true, createdAt = now, updatedAt = now)
+        db.care().insertRule(rule)
         assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.archiveTank(tank.id, now, false) } }
         repository.archiveTank(tank.id, now, true)
         assertEquals(TankStatus.archived, db.tanks().get(tank.id)?.status)
-        assertEquals(fish.id, db.fish().get(fish.id)?.id)
+        assertEquals(FishStatus.archived, db.fish().get(active.id)?.status)
+        assertEquals(FishStatus.archived, db.fish().get(quarantine.id)?.status)
+        assertEquals(FishStatus.transferred, db.fish().get(transferred.id)?.status)
+        assertEquals(FishStatus.deceased, db.fish().get(deceased.id)?.status)
+        assertEquals(FishStatus.archived, db.fish().get(archived.id)?.status)
+        assertEquals(FishStatus.active, db.fish().get(moved.id)?.status)
+        assertEquals(destination.id, db.fish().get(moved.id)?.tankId)
+        assertEquals(active.status, db.fish().observeEvents(active.id).first().single { it.type == FishEventType.archived }.status)
+        assertEquals(1, db.growthRecords().observeForFish(active.id).first().size)
+        assertEquals(1, db.feeding().observeForFish(active.id, tank.id).first().size)
         assertEquals(CareTaskStatus.cancelled, db.care().getTask(task.id)?.status)
+        assertEquals(CareTaskStatus.completed, db.care().getTask(completed.id)?.status)
+        assertFalse(db.care().getRule(rule.id)!!.enabled)
+        assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.archiveTank(tank.id, now + 1, true) } }
+        assertThrows(IllegalArgumentException::class.java) { runBlocking { repository.saveCareTask(task.copy(id = "invalid-future-task", plannedAt = now + 2 * 86_400_000)) } }
+        Unit
+    }
+
+    @Test fun archiveFailureRollsBackTankFishEventsAndTasks() = runBlocking {
+        val tank = tank(); repository.saveTank(tank)
+        val fish = fish(tank.id); repository.saveFish(fish)
+        val task = CareTask(tankId = tank.id, fishId = null, type = CareTaskType.water_test, plannedAt = now, recurrenceRule = null, notes = null, createdAt = now, updatedAt = now)
+        repository.saveCareTask(task)
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER fail_fish_archive BEFORE UPDATE OF status ON fish WHEN NEW.id = '${fish.id}' BEGIN SELECT RAISE(ABORT, 'injected fish update failure'); END")
+        assertThrows(Exception::class.java) { runBlocking { repository.archiveTank(tank.id, now, true) } }
+        assertEquals(TankStatus.active, db.tanks().get(tank.id)?.status)
+        assertEquals(FishStatus.active, db.fish().get(fish.id)?.status)
+        assertTrue(db.fish().observeEvents(fish.id).first().none { it.type == FishEventType.archived })
+        assertEquals(CareTaskStatus.pending, db.care().getTask(task.id)?.status)
+        Unit
     }
 
     private fun tank(id: String = java.util.UUID.randomUUID().toString()) = Tank(id = id, name = "Tank", type = TankType.freshwater, photoId = null, capacityValue = null, capacityUnit = null, startedAt = null, status = TankStatus.active, notes = null, createdAt = now, updatedAt = now)
