@@ -10,18 +10,34 @@ import com.guanyji.app.data.repository.LocalRepository
 import com.guanyji.app.data.photo.ManagedPhotoFileStore
 import com.guanyji.app.data.photo.PhotoRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+sealed interface TankFishState {
+    data object Loading : TankFishState
+    data class Success(val fish: List<Fish>) : TankFishState
+    data class Error(val message: String) : TankFishState
+}
+
+internal fun tankFishState(fish: List<Fish>? = null, error: Throwable? = null): TankFishState = when {
+    error != null -> TankFishState.Error(error.message ?: "鱼只加载失败")
+    fish == null -> TankFishState.Loading
+    else -> TankFishState.Success(fish)
+}
 
 class TankViewModel(application: Application) : AndroidViewModel(application) {
     private val database = DatabaseFactory.create(application)
     private val repository = LocalRepository(database)
     val photoRepository = PhotoRepository(database, ManagedPhotoFileStore(application))
     val tanks = repository.tanks().map<List<TankSummary>, List<TankSummary>?> { it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private val fishRetry = MutableStateFlow(0)
 
     fun save(tank: Tank, onSaved: () -> Unit, onError: (String) -> Unit) = viewModelScope.launch {
         try { repository.saveTank(tank); CareNotificationScheduler.sync(getApplication()); onSaved() } catch (error: CancellationException) { throw error } catch (error: Exception) { onError(error.message ?: "保存失败") }
@@ -43,6 +59,18 @@ class TankViewModel(application: Application) : AndroidViewModel(application) {
             .map<TankSummary?, SummaryState> { it?.let(SummaryState::Found) ?: SummaryState.Missing }
             .catch { emit(SummaryState.Failed(it.message ?: "鱼缸加载失败")) }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SummaryState.Loading)
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun fishState(id: String): kotlinx.coroutines.flow.StateFlow<TankFishState> = fishRetry
+        .flatMapLatest {
+            repository.fishInTank(id)
+                .map<List<Fish>, TankFishState> { tankFishState(it) }
+                .onStart { emit(TankFishState.Loading) }
+                .catch { emit(tankFishState(error = it)) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TankFishState.Loading)
+
+    fun retryFish() { fishRetry.value += 1 }
     fun fish(id: String) = repository.fishInTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun tests(id: String) = repository.waterTestsForTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun changes(id: String) = repository.waterChangesForTank(id).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
