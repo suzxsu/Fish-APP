@@ -37,6 +37,7 @@ class FishViewModel(application: Application) : AndroidViewModel(application) {
     fun saveGrowth(value: GrowthRecord, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.saveGrowthRecord(value) }
     fun deleteGrowth(id: String, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) { repository.deleteGrowthRecord(id) }
     fun feedings(id: String, tankId: String) = repository.feedingsForFish(id, tankId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    fun waterTests(tankId: String) = repository.waterTestsForTank(tankId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun photo(id: String?) = (id?.let(repository::photo) ?: flowOf(null)).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     fun save(value: Fish, length: Double?, weight: Double?, onSaved: () -> Unit, onError: (String) -> Unit) = run(onSaved, onError) {
         val growth = if (length != null || weight != null) GrowthRecord(fishId = value.id, measuredAt = value.addedAt, lengthValue = length, lengthUnit = length?.let { "cm" }, weightValue = weight, weightUnit = weight?.let { "g" }, method = null, photoId = null, notes = null) else null

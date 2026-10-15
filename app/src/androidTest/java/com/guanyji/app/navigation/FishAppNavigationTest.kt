@@ -32,7 +32,7 @@ class FishAppNavigationTest {
     @Test
     fun appOpensOnOverviewWithoutChangingTabs() {
         composeRule.onNodeWithTag("destination-overview").assertIsSelected()
-        composeRule.onNodeWithText("今日总览").assertIsDisplayed()
+        composeRule.onNodeWithText("观鱼记").assertIsDisplayed()
     }
 
     @Test
