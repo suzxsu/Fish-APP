@@ -6,33 +6,59 @@ import android.app.Application
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.flow.flowOf
+import coil.compose.SubcomposeAsyncImage
+import coil.compose.SubcomposeAsyncImageContent
+import coil.request.ImageRequest
+import com.guanyji.app.R
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
+import com.guanyji.app.feature.overview.DashboardTokens
+import com.guanyji.app.feature.overview.FishIcons
 import com.guanyji.app.feature.photo.*
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -41,10 +67,13 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
-
 private enum class FishSort(val label: String) { added("最近添加"), tankDate("入缸日期"), measured("最近测量") }
 private val statuses = listOf(null to "全部", FishStatus.active to "在养", FishStatus.quarantine to "隔离", FishStatus.transferred to "转出", FishStatus.deceased to "已故", FishStatus.archived to "归档")
 
+/**
+ * 我的鱼列表：顶部为水族主题海报头部，下方为自适应双列鱼只卡牌墙。
+ * 搜索、鱼缸筛选、状态筛选、排序与新增 / 编辑行为均保持原有实现，仅调整视觉与布局。
+ */
 @Composable
 fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (String) -> Unit, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
     val data by vm.fish.collectAsStateWithLifecycle()
@@ -54,6 +83,9 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
     var status by remember { mutableStateOf<FishStatus?>(null) }
     var sort by remember { mutableStateOf(FishSort.added) }
     var tankMenu by remember { mutableStateOf(false) }
+    var sortMenu by remember { mutableStateOf(false) }
+    // 只做一次入场动画的鱼只，避免滚动回收后重复播放。
+    val entranceShown = remember { mutableSetOf<String>() }
     val tankNames = tanks.associate { it.id to it.name }
     val rows = data.orEmpty().filter { row ->
         (status == null || row.fish.status == status) && (tankId == null || row.fish.tankId == tankId) &&
@@ -63,60 +95,154 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
         FishSort.tankDate -> rows.sortedByDescending { it.fish.addedAt }
         FishSort.measured -> rows.sortedByDescending { it.lastMeasuredAt ?: Long.MIN_VALUE }
     } }
-    Scaffold(floatingActionButton = { FloatingActionButton(onClick = onCreate) { Icon(Icons.Outlined.Add, contentDescription = "添加鱼") } }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            PageTitle("我的鱼", "${data?.count { it.fish.status == FishStatus.active || it.fish.status == FishStatus.quarantine } ?: 0} 条在养")
-            OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth(), singleLine = true, label = { Text("搜索名称或鱼种") })
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box {
-                    OutlinedButton(onClick = { tankMenu = true }) { Text("鱼缸：${tankId?.let(tankNames::get) ?: "全部"}") }
-                    DropdownMenu(tankMenu, { tankMenu = false }) {
-                        DropdownMenuItem(text = { Text("全部鱼缸") }, onClick = { tankId = null; tankMenu = false })
-                        tanks.forEach { t -> DropdownMenuItem(text = { Text(t.name) }, onClick = { tankId = t.id; tankMenu = false }) }
+    val activeCount = data?.count { it.fish.status == FishStatus.active || it.fish.status == FishStatus.quarantine }
+    Scaffold(containerColor = DashboardTokens.PageBackground) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            FishListHeader(activeCount = activeCount, onAdd = onCreate)
+            LazyVerticalGrid(
+                columns = GridCells.Adaptive(minSize = 148.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(11.dp),
+                verticalArrangement = Arrangement.spacedBy(11.dp),
+            ) {
+                item(key = "controls", span = { GridItemSpan(maxLineSpan) }) {
+                    Column(Modifier.fillMaxWidth().padding(bottom = 2.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = search,
+                            onValueChange = { search = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            shape = FishCardTokens.FieldShape,
+                            label = { Text("搜索名称或鱼种") },
+                            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box {
+                                OutlinedButton(shape = FishCardTokens.FieldShape, onClick = { tankMenu = true }) { Text("鱼缸：${tankId?.let(tankNames::get) ?: "全部"}") }
+                                DropdownMenu(tankMenu, { tankMenu = false }) {
+                                    DropdownMenuItem(text = { Text("全部鱼缸") }, onClick = { tankId = null; tankMenu = false })
+                                    tanks.forEach { t -> DropdownMenuItem(text = { Text(t.name) }, onClick = { tankId = t.id; tankMenu = false }) }
+                                }
+                            }
+                            Box {
+                                OutlinedButton(shape = FishCardTokens.FieldShape, onClick = { sortMenu = true }) { Text("排序：${sort.label}") }
+                                DropdownMenu(sortMenu, { sortMenu = false }) { FishSort.entries.forEach { item -> DropdownMenuItem(text = { Text(item.label) }, onClick = { sort = item; sortMenu = false }) } }
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            statuses.forEach { (value, label) -> FilterChip(status == value, { status = value }, label = { Text(label, style = MaterialTheme.typography.labelSmall) }) }
+                        }
                     }
                 }
-                Spacer(Modifier.width(8.dp))
-                var sortMenu by remember { mutableStateOf(false) }
-                Box {
-                    OutlinedButton(onClick = { sortMenu = true }) { Text("排序：${sort.label}") }
-                    DropdownMenu(sortMenu, { sortMenu = false }) { FishSort.entries.forEach { item -> DropdownMenuItem(text = { Text(item.label) }, onClick = { sort = item; sortMenu = false }) } }
-                }
-            }
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                statuses.forEach { (value, label) -> FilterChip(status == value, { status = value }, label = { Text(label, style = MaterialTheme.typography.labelSmall) }) }
-            }
-            if (data == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingState() }
-            else if (rows.isEmpty()) Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                EmptyState(if (search.isNotBlank() || status != null || tankId != null) "没有匹配的鱼只" else "还没有鱼只档案", "添加鱼只后，照片、成长和喂食记录会在这里汇总。")
-                if (search.isNotBlank()) TextButton(onClick = { search = "" }) { Text("清除搜索") }
-                Button(onClick = onCreate) { Text("添加鱼") }
-            } else LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 88.dp)) {
-                items(rows, key = { it.fish.id }) { row ->
-                    val photo by remember(row.fish.coverPhotoId) { vm.photo(row.fish.coverPhotoId) }.collectAsStateWithLifecycle()
-                    FishCard(row, photo, tankNames[row.fish.tankId] ?: "鱼缸未找到", { onOpen(row.fish.id) }, { onEdit(row.fish.id) })
+                if (data == null) {
+                    item(key = "loading", span = { GridItemSpan(maxLineSpan) }) {
+                        Box(Modifier.fillMaxWidth().padding(vertical = 56.dp), contentAlignment = Alignment.Center) { LoadingState() }
+                    }
+                } else if (rows.isEmpty()) {
+                    item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
+                        Column(Modifier.fillMaxWidth().padding(top = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            EmptyState(if (search.isNotBlank() || status != null || tankId != null) "没有匹配的鱼只" else "还没有鱼只档案", "添加鱼只后，照片、成长和喂食记录会在这里汇总。")
+                            if (search.isNotBlank()) TextButton(onClick = { search = "" }) { Text("清除搜索") }
+                            Button(onClick = onCreate) { Text("添加鱼") }
+                        }
+                    }
+                } else {
+                    itemsIndexed(rows, key = { _, row -> row.fish.id }) { index, row ->
+                        val photo by remember(row.fish.coverPhotoId) { vm.photo(row.fish.coverPhotoId) }.collectAsStateWithLifecycle()
+                        val model = remember(row, tanks) { fishCardModel(row, tanks) }
+                        FishTradingCard(
+                            model = model,
+                            photo = photo,
+                            onClick = { onOpen(row.fish.id) },
+                            onEdit = { onEdit(row.fish.id) },
+                            animateEntrance = index < 8 && !entranceShown.contains(row.fish.id),
+                            onEntranceShown = { shown -> entranceShown.add(shown) },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/** 页面顶部水族海报：背景使用设计稿提供的珊瑚礁小丑鱼图，文字只展示真实计数。 */
 @Composable
-private fun FishCard(row: FishSummary, photo: Photo?, tankName: String, onOpen: () -> Unit, onEdit: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
-        Row(Modifier.padding(10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            ManagedPhotoImage(photo, true, Modifier.size(92.dp, 86.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(row.fish.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    Text(row.fish.status.label(), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+private fun FishListHeader(activeCount: Int?, onAdd: () -> Unit) {
+    Box(Modifier.fillMaxWidth().heightIn(min = 152.dp)) {
+        SubcomposeAsyncImage(
+            model = ImageRequest.Builder(LocalContext.current).data(R.drawable.dashboard_header_reef).crossfade(320).build(),
+            contentDescription = "水族主题背景：珊瑚礁中的小丑鱼",
+            contentScale = ContentScale.Crop,
+            alignment = Alignment.TopCenter,
+            modifier = Modifier.matchParentSize(),
+            loading = { FishListHeaderFallback() },
+            error = { FishListHeaderFallback() },
+            success = { SubcomposeAsyncImageContent() },
+        )
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    0.0f to Color(0x80102A44),
+                    0.5f to Color(0x4D102A44),
+                    0.78f to Color(0xE6F2F7FB),
+                    1.0f to DashboardTokens.PageBackground,
+                ),
+            ),
+        )
+        Column(
+            Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 18.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(FishIcons.Fish, contentDescription = null, tint = Color.White, modifier = Modifier.size(26.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "我的鱼",
+                    color = Color.White,
+                    fontSize = 28.sp,
+                    lineHeight = 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f).testTag("fish-list-title"),
+                )
+                Box(
+                    Modifier.size(46.dp).clip(CircleShape).background(Color(0x40FFFFFF)).border(1.dp, Color(0x59FFFFFF), CircleShape).clickable(onClick = onAdd),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Outlined.Add, contentDescription = "添加鱼", tint = Color.White, modifier = Modifier.size(22.dp))
                 }
-                Text("${row.fish.species ?: "魚種未記錄"} · $tankName", style = MaterialTheme.typography.bodySmall)
-                Text("入缸 ${durationDays(row.fish.addedAt, row.fish.deathDate, row.fish.status == FishStatus.deceased)} 天 · 體長 ${row.lastLength?.let { "${it.pretty()} ${row.lastLengthUnit.orEmpty()}" } ?: "暂无记录"}", style = MaterialTheme.typography.bodySmall)
-                Text("今日喂食 ${if (row.todayFeedings == 0) "暂无记录" else "${row.todayFeedings} 次"}", style = MaterialTheme.typography.bodySmall)
             }
-            IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, contentDescription = "编辑${row.fish.name}") }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "记录每一条鱼的成长",
+                    color = Color(0xFFE4F0FA),
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = if (activeCount == null) "正在读取本地记录" else "在养 $activeCount 条",
+                    color = Color(0xFFEAF4FB),
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(FishCardTokens.ChipShape)
+                        .background(FishCardTokens.ControlSurface)
+                        .border(1.dp, Color(0x59FFFFFF), FishCardTokens.ChipShape)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun FishListHeaderFallback() {
+    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(FishCardTokens.ReefFallbackTop, FishCardTokens.ReefFallbackBottom))))
 }
 
 @Composable
@@ -187,66 +313,555 @@ fun FishFormScreen(fishId: String?, onBack: () -> Unit, onSaved: (String) -> Uni
 }
 
 @Composable
-fun FishDetailScreen(fishId: String, onBack: () -> Unit, onEdit: () -> Unit, onOpenRecords: (String) -> Unit = {}, onQuickFeeding: () -> Unit = {}, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
+fun FishDetailScreen(
+    fishId: String,
+    onBack: () -> Unit,
+    onEdit: () -> Unit,
+    onOpenRecords: (String) -> Unit = {},
+    onQuickFeeding: () -> Unit = {},
+    onOpenTank: (String) -> Unit = {},
+    vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application)),
+) {
     val summary by remember(fishId) { vm.summary(fishId) }.collectAsStateWithLifecycle()
-    val tanks by vm.tanks.collectAsStateWithLifecycle(); val events by remember(fishId) { vm.events(fishId) }.collectAsStateWithLifecycle(); val growth by remember(fishId) { vm.growth(fishId) }.collectAsStateWithLifecycle()
+    val tanks by vm.tanks.collectAsStateWithLifecycle()
+    val events by remember(fishId) { vm.events(fishId) }.collectAsStateWithLifecycle()
+    val growth by remember(fishId) { vm.growth(fishId) }.collectAsStateWithLifecycle()
     val latestLength by remember(fishId) { vm.latestLength(fishId) }.collectAsStateWithLifecycle()
     val latestWeight by remember(fishId) { vm.latestWeight(fishId) }.collectAsStateWithLifecycle()
-    val fish = summary?.fish; val photo by remember(fish?.coverPhotoId) { vm.photo(fish?.coverPhotoId) }.collectAsStateWithLifecycle()
-    var action by remember { mutableStateOf<FishStatus?>(null) }; var showArchive by remember { mutableStateOf(false) }; var unknownDeath by remember { mutableStateOf(false) }; var showMove by remember { mutableStateOf(false) }; var targetTankId by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf<String?>(null) }; var busy by remember { mutableStateOf(false) }; var date by remember { mutableLongStateOf(todayStart()) }
-    Scaffold(topBar = { FishTopBar(fish?.name ?: "鱼只详情", onBack, { IconButton(onClick = onEdit) { Icon(Icons.Outlined.Edit, contentDescription = "编辑档案") } }) }) { padding ->
+    val fish = summary?.fish
+    val tank = tanks.firstOrNull { it.id == fish?.tankId }
+    val photo by remember(fish?.coverPhotoId) { vm.photo(fish?.coverPhotoId) }.collectAsStateWithLifecycle()
+    val tankPhoto by remember(tank?.photoId) { vm.photo(tank?.photoId) }.collectAsStateWithLifecycle()
+    // 水质只展示该鱼缸最近一次真实检测结果，没有记录时保持“尚无测量数据”。
+    val tankId = tank?.id
+    val waterTests by remember(tankId) { if (tankId == null) flowOf(emptyList<WaterTestWithValues>()) else vm.waterTests(tankId) }.collectAsStateWithLifecycle(initialValue = emptyList())
+    val latestWaterTest = remember(waterTests) { waterTests.maxByOrNull { it.test.measuredAt } }
+    val waterMetrics = remember(latestWaterTest) { fishWaterMetrics(latestWaterTest?.values.orEmpty()) }
+    var action by remember { mutableStateOf<FishStatus?>(null) }
+    var showArchive by remember { mutableStateOf(false) }
+    var unknownDeath by remember { mutableStateOf(false) }
+    var showMove by remember { mutableStateOf(false) }
+    var targetTankId by remember { mutableStateOf("") }
+    var moreMenu by remember { mutableStateOf(false) }
+    var addMenu by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var date by remember { mutableLongStateOf(todayStart()) }
+
+    Scaffold(
+        containerColor = DashboardTokens.PageBackground,
+        bottomBar = {
+            if (fish != null) FishDetailActionBar(
+                busy = busy,
+                menuOpen = addMenu,
+                onMenuOpenChange = { addMenu = it },
+                onEdit = onEdit,
+                onQuickFeeding = { addMenu = false; onQuickFeeding() },
+                onGrowthRecord = { addMenu = false; onOpenRecords("growth") },
+                onFeedingRecords = { addMenu = false; onOpenRecords("feeding") },
+            )
+        },
+    ) { padding ->
         if (summary == null) Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) { LoadingState("正在加载鱼只档案") }
-        else Column(Modifier.fillMaxSize().padding(padding)) {
-            ManagedPhotoImage(photo, false, Modifier.fillMaxWidth().height(210.dp))
-            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("${fish!!.name} · ${fish.species ?: "鱼种未记录"}", style = MaterialTheme.typography.headlineSmall)
-                Text("${tanks.firstOrNull { it.id == fish.tankId }?.name ?: "鱼缸未找到"} · ${fish.status.label()}")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    InfoCard("入缸时长", { Text("${durationDays(fish.addedAt, fish.deathDate, fish.status == FishStatus.deceased)} 天") }, Modifier.weight(1f))
-                    InfoCard("最近体长", { Text(latestLength?.let { "${it.lengthValue?.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "暂无记录"); latestLength?.let { Text(formatDate(it.measuredAt), style = MaterialTheme.typography.bodySmall) } }, Modifier.weight(1f))
+        else Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState())) {
+            FishDetailHero(
+                fish = fish!!,
+                tankType = tank?.type,
+                photo = photo,
+                durationDays = durationDays(fish.addedAt, fish.deathDate, fish.status == FishStatus.deceased),
+                lengthText = latestLength?.let { "${it.lengthValue?.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "暂无记录",
+                chips = fishDetailChips(fish, ::formatDate),
+                onBack = onBack,
+                onEdit = onEdit,
+                moreMenu = moreMenu,
+                onMoreMenuChange = { moreMenu = it },
+                onMove = { showMove = true },
+                onStatus = { action = it },
+                onArchive = { showArchive = true },
+            )
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                FishDetailWaterStrip(metrics = waterMetrics, measuredAt = latestWaterTest?.test?.measuredAt)
+
+                FishDetailSection(title = "成长记录", actionLabel = "查看全部", onAction = { onOpenRecords("growth") }) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FishDetailMetricCard(
+                            title = "最近体长",
+                            value = latestLength?.let { "${it.lengthValue?.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "未记录",
+                            caption = latestLength?.let { formatDate(it.measuredAt) } ?: "--",
+                            modifier = Modifier.weight(1f),
+                        )
+                        FishDetailMetricCard(
+                            title = "最近体重",
+                            value = latestWeight?.let { "${it.weightValue?.pretty()} ${it.weightUnit.orEmpty()}" } ?: "未记录",
+                            caption = latestWeight?.let { formatDate(it.measuredAt) } ?: "--",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Text("共 ${growth.size} 条成长记录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                InfoCard("最近体重", { Text(latestWeight?.let { "${it.weightValue?.pretty()} ${it.weightUnit.orEmpty()}" } ?: "暂无记录"); latestWeight?.let { Text(formatDate(it.measuredAt), style = MaterialTheme.typography.bodySmall) } })
-                InfoCard("档案信息", { Text("入缸日期：${formatDate(fish.addedAt)}"); Text("出生日期：${fish.birthDate?.let(::formatDate) ?: "未记录"}"); if (fish.status == FishStatus.deceased) Text("死亡日期：${fish.deathDate?.let(::formatDate) ?: "未知"}"); Text("性别：${fish.sex ?: "未记录"} · 来源：${fish.source ?: "未记录"}"); Text("备注：${fish.notes ?: "暂无"}") })
-                InfoCard("今日喂食", { Text(if (summary!!.todayFeedings == 0) "暂无记录" else "已记录 ${summary!!.todayFeedings} 次") })
-                InfoCard("成长记录", { Text("共 ${growth.size} 条"); growth.take(3).forEach { Text("${formatDate(it.measuredAt)} · 体长 ${it.lengthValue?.let { n -> "${n.pretty()} ${it.lengthUnit.orEmpty()}" } ?: "暂无记录"} · 体重 ${it.weightValue?.let { n -> "${n.pretty()} ${it.weightUnit.orEmpty()}" } ?: "暂无记录"}") }; TextButton(onClick = { onOpenRecords("growth") }) { Text("查看成长") } })
-                InfoCard("喂食", { Row { Button(onClick = onQuickFeeding) { Text("快速喂食") }; TextButton(onClick = { onOpenRecords("feeding") }) { Text("查看喂食记录") } } })
-                InfoCard("时间线", {
-                    if (events.isEmpty()) Text("暂无历史事件")
-                    events.forEach { event ->
-                        val description = when (event.type) {
-                            FishEventType.created -> "建立档案"
-                            FishEventType.moved -> {
-                                val from = tanks.firstOrNull { it.id == event.tankId }?.name ?: "原鱼缸"
-                                val to = tanks.firstOrNull { it.id == event.targetTankId }?.name ?: "目标鱼缸"
-                                "转缸：$from → $to"
+
+                FishDetailSection(title = "喂食记录", actionLabel = "查看全部", onAction = { onOpenRecords("feeding") }) {
+                    FishDetailLinkCard(
+                        icon = FishIcons.Fish,
+                        title = "今日喂食",
+                        subtitle = if (summary!!.todayFeedings == 0) "暂无记录" else "已记录 ${summary!!.todayFeedings} 次",
+                        onClick = { onOpenRecords("feeding") },
+                    )
+                }
+
+                FishDetailSection(title = "相关鱼缸") {
+                    if (tank == null) {
+                        Text("鱼缸未找到", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        FishDetailTankCard(tank = tank, photo = tankPhoto, onClick = { onOpenTank(tank.id) })
+                    }
+                }
+
+                FishDetailSection(title = "时间线", actionLabel = "查看全部", onAction = { onOpenRecords("timeline") }) {
+                    if (events.isEmpty()) {
+                        Text("暂无历史事件", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            events.take(2).forEach { event ->
+                                Text(
+                                    "${formatDate(event.occurredAt)} · ${fishEventLabel(event, tanks)}${if (!event.dateKnown) "（日期未知）" else ""}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
                             }
-                            FishEventType.statusChanged -> event.status?.label() ?: "状态变更"
-                            FishEventType.archived -> "归档"
                         }
-                        Text("${formatDate(event.occurredAt)} · $description${if (!event.dateKnown) "（日期未知）" else ""}")
-                    }
-                    TextButton(onClick = { onOpenRecords("timeline") }) { Text("查看完整时间线") }
-                })
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (fish.status == FishStatus.active || fish.status == FishStatus.quarantine) {
-                        OutlinedButton(onClick = { showMove = true }) { Text("转缸") }
-                        OutlinedButton(onClick = { action = FishStatus.quarantine }) { Text("隔离") }
-                        if (fish.status == FishStatus.quarantine) OutlinedButton(onClick = { action = FishStatus.active }) { Text("恢复在养") }
-                        OutlinedButton(onClick = { action = FishStatus.transferred }) { Text("标记转出") }
-                        OutlinedButton(onClick = { action = FishStatus.deceased }) { Text("标记已故") }
                     }
                 }
-                if (fish.status != FishStatus.archived) OutlinedButton(onClick = { action = null; showArchive = true }, modifier = Modifier.fillMaxWidth()) { Text("归档鱼只") }
-                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+
+                FishDetailSection(title = "档案信息") {
+                    FishDetailProfileCard(fish)
+                }
+
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             }
         }
     }
+
     if (action == FishStatus.deceased) AlertDialog(onDismissRequest = { action = null }, title = { Text("标记为已故") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("请确认发生日期；日期不详时可明确记录为未知。") ; DateField("发生日期", date) { it?.let { v -> date = v } }; Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(unknownDeath, { unknownDeath = it }); Text("日期不详") } } }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, FishStatus.deceased, if (unknownDeath) null else date, !unknownDeath, { busy = false; action = null }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     else if (action == FishStatus.transferred) AlertDialog(onDismissRequest = { action = null }, title = { Text("标记已转出") }, text = { DateField("转出日期", date) { it?.let { v -> date = v } } }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, FishStatus.transferred, date, true, { busy = false; action = null }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认转出") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     else if (action == FishStatus.active || action == FishStatus.quarantine) AlertDialog(onDismissRequest = { action = null }, title = { Text("更改鱼只状态") }, text = { Text("${fish?.name}将标记为${action!!.label()}。") }, confirmButton = { TextButton(enabled = !busy, onClick = { busy = true; vm.setStatus(fishId, action!!, System.currentTimeMillis(), onSaved = { busy = false; action = null }, onError = { busy = false; error = it }) }) { Text("确认") } }, dismissButton = { TextButton(onClick = { action = null }) { Text("取消") } })
     if (showArchive) ConfirmDialog("归档鱼只？", "归档后停止该鱼只的未来任务，档案与历史记录仍可查询。", "归档", onConfirm = { busy = true; vm.archive(fishId, { busy = false; showArchive = false; onBack() }, { busy = false; error = it }); showArchive = false }, onDismiss = { showArchive = false })
     if (showMove) AlertDialog(onDismissRequest = { showMove = false }, title = { Text("转缸") }, text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { var menu by remember { mutableStateOf(false) }; Box { OutlinedButton(onClick = { menu = true }, modifier = Modifier.fillMaxWidth()) { Text("目标鱼缸：${tanks.firstOrNull { it.id == targetTankId }?.name ?: "选择鱼缸"}") }; DropdownMenu(menu, { menu = false }) { tanks.filter { it.status == TankStatus.active && it.id != fish?.tankId }.forEach { t -> DropdownMenuItem(text = { Text(t.name) }, onClick = { targetTankId = t.id; menu = false }) } } }; DateField("转缸日期", date) { it?.let { value -> date = value } } } }, confirmButton = { TextButton(enabled = !busy && targetTankId.isNotBlank(), onClick = { busy = true; vm.move(fishId, targetTankId, date, { busy = false; showMove = false }, { busy = false; error = it }) }) { Text(if (busy) "保存中" else "确认转缸") } }, dismissButton = { TextButton(onClick = { showMove = false }) { Text("取消") } })
+}
+
+/* ---------------------------- 详情页：水族头部 ---------------------------- */
+
+@Composable
+private fun FishDetailHero(
+    fish: Fish,
+    tankType: TankType?,
+    photo: Photo?,
+    durationDays: Long,
+    lengthText: String,
+    chips: List<FishDetailChip>,
+    onBack: () -> Unit,
+    onEdit: () -> Unit,
+    moreMenu: Boolean,
+    onMoreMenuChange: (Boolean) -> Unit,
+    onMove: () -> Unit,
+    onStatus: (FishStatus) -> Unit,
+    onArchive: () -> Unit,
+) {
+    val palette = remember(fish.status) { fish.status.cardPalette() }
+    Box(Modifier.fillMaxWidth().heightIn(min = 320.dp)) {
+        if (photo == null) FishDetailPhotoFallback()
+        else ManagedPhotoImage(photo, thumbnail = false, modifier = Modifier.matchParentSize())
+        // 上暗保证返回 / 更多按钮可读，下暗让身份卡与照片自然过渡。
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    0.0f to Color(0x8C0B2540),
+                    0.34f to Color(0x2E0B2540),
+                    0.7f to Color(0x66081D33),
+                    1.0f to Color(0xB3081D33),
+                ),
+            ),
+        )
+        Row(
+            modifier = Modifier.align(Alignment.TopStart).fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            FishHeroIconButton(icon = Icons.AutoMirrored.Outlined.ArrowBack, description = "返回", onClick = onBack)
+            Spacer(Modifier.weight(1f))
+            Box {
+                FishHeroIconButton(icon = Icons.Outlined.MoreVert, description = "更多操作", onClick = { onMoreMenuChange(true) })
+                DropdownMenu(expanded = moreMenu, onDismissRequest = { onMoreMenuChange(false) }) {
+                    val manageable = fish.status == FishStatus.active || fish.status == FishStatus.quarantine
+                    if (manageable) {
+                        DropdownMenuItem(text = { Text("转缸") }, onClick = { onMoreMenuChange(false); onMove() })
+                        if (fish.status == FishStatus.quarantine) {
+                            DropdownMenuItem(text = { Text("恢复在养") }, onClick = { onMoreMenuChange(false); onStatus(FishStatus.active) })
+                        } else {
+                            DropdownMenuItem(text = { Text("隔离观察") }, onClick = { onMoreMenuChange(false); onStatus(FishStatus.quarantine) })
+                        }
+                        DropdownMenuItem(text = { Text("标记转出") }, onClick = { onMoreMenuChange(false); onStatus(FishStatus.transferred) })
+                        DropdownMenuItem(text = { Text("标记已故") }, onClick = { onMoreMenuChange(false); onStatus(FishStatus.deceased) })
+                    }
+                    if (fish.status != FishStatus.archived) {
+                        DropdownMenuItem(text = { Text("归档鱼只") }, onClick = { onMoreMenuChange(false); onArchive() })
+                    }
+                }
+            }
+        }
+        // 状态标签与身份卡放在同一列流式布局中，字体放大或名称换行时不会互相遮挡。
+        Column(
+            modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FishCardStatus(fish.status.label(), palette)
+            FishDetailIdentityPanel(
+                fish = fish,
+                tankType = tankType,
+                durationDays = durationDays,
+                lengthText = lengthText,
+                chips = chips,
+                onEdit = onEdit,
+            )
+        }
+    }
+}
+
+@Composable
+private fun FishDetailIdentityPanel(
+    fish: Fish,
+    tankType: TankType?,
+    durationDays: Long,
+    lengthText: String,
+    chips: List<FishDetailChip>,
+    onEdit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val palette = remember(fish.status) { fish.status.cardPalette() }
+    val speciesLine = listOfNotNull(fish.species?.trim()?.takeIf { it.isNotEmpty() } ?: "鱼种未记录", tankType?.let(::waterTypeLabel)).joinToString(" · ")
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(FishCardTokens.CardShape)
+            .background(Brush.verticalGradient(listOf(Color(0xE6163B5E), Color(0xF00A2440))))
+            .border(1.dp, Brush.linearGradient(listOf(palette.accent.copy(alpha = 0.55f), Color(0x33FFFFFF))), FishCardTokens.CardShape)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = fish.name,
+                color = FishCardTokens.CardInk,
+                fontSize = 24.sp,
+                lineHeight = 28.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            FishHeroIconButton(icon = Icons.Outlined.Edit, description = "编辑档案", onClick = onEdit, boxSize = 40.dp, iconSize = 18.dp)
+        }
+        Text(speciesLine, color = FishCardTokens.CardSecondaryInk, fontSize = 13.sp, lineHeight = 17.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (chips.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                chips.forEach { chip -> FishDetailChipView(chip) }
+            }
+        }
+        Box(Modifier.fillMaxWidth().padding(top = 2.dp).height(1.dp).background(Color(0x26FFFFFF)))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            FishDetailHeroStat(icon = FishIcons.Calendar, label = "入缸", value = "$durationDays 天", modifier = Modifier.weight(1f))
+            Box(Modifier.width(1.dp).height(34.dp).background(Color(0x26FFFFFF)))
+            FishDetailHeroStat(icon = FishIcons.Ruler, label = "最后体长", value = lengthText, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun FishDetailHeroStat(icon: ImageVector, label: String, value: String, modifier: Modifier = Modifier) {
+    Row(modifier.padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+        Icon(icon, contentDescription = null, tint = FishCardTokens.CardSecondaryInk, modifier = Modifier.size(16.dp))
+        Column {
+            Text(label, color = FishCardTokens.CardSecondaryInk, fontSize = 11.sp, lineHeight = 14.sp, maxLines = 1)
+            Text(value, color = FishCardTokens.CardInk, fontSize = 14.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun FishDetailChipView(chip: FishDetailChip) {
+    Row(
+        modifier = Modifier
+            .clip(FishCardTokens.ChipShape)
+            .background(Color(0x33FFFFFF))
+            .border(1.dp, Color(0x2EFFFFFF), FishCardTokens.ChipShape)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(chip.label, color = FishCardTokens.CardSecondaryInk, fontSize = 11.sp, maxLines = 1)
+        Text(chip.value, color = FishCardTokens.CardInk, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+}
+
+@Composable
+private fun FishHeroIconButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    boxSize: Dp = 44.dp,
+    iconSize: Dp = 20.dp,
+) {
+    Box(
+        modifier = Modifier
+            .size(boxSize)
+            .clip(CircleShape)
+            .background(Color(0x4D0B2540))
+            .border(1.dp, Color(0x40FFFFFF), CircleShape)
+            .clickable(onClick = onClick)
+            .semantics {
+                contentDescription = description
+                role = Role.Button
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White, modifier = Modifier.size(iconSize))
+    }
+}
+
+@Composable
+private fun FishDetailPhotoFallback() {
+    Box(
+        modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF123C60), Color(0xFF0A2036)))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Icon(FishIcons.Fish, contentDescription = null, tint = Color(0x66CFE6F7), modifier = Modifier.size(44.dp))
+            Text("暂无照片", color = Color(0x99CFE6F7), fontSize = 13.sp)
+        }
+    }
+}
+
+/* ---------------------------- 详情页：内容区块 ---------------------------- */
+
+@Composable
+private fun FishDetailSection(
+    title: String,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            if (actionLabel != null && onAction != null) TextButton(onClick = onAction) { Text(actionLabel, style = MaterialTheme.typography.labelLarge) }
+        }
+        content()
+    }
+}
+
+/** 水质摘要：只使用该鱼缸最近一次检测的真实数值，没有记录时不显示任何默认值。 */
+@Composable
+private fun FishDetailWaterStrip(metrics: List<FishWaterMetric>, measuredAt: Long?) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("最近水质", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text(
+                measuredAt?.let { "检测于 ${formatDate(it)}" } ?: "尚无测量数据",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (metrics.isEmpty()) {
+            Text("该鱼缸还没有水质检测记录，可在鱼缸页记录后再回到这里查看。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val columns = if (maxWidth < 300.dp) 2 else metrics.size
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    metrics.chunked(columns).forEach { rowItems ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            rowItems.forEach { metric -> FishDetailWaterMetric(metric, Modifier.weight(1f)) }
+                            repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FishDetailWaterMetric(metric: FishWaterMetric, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(waterMetricIcon(metric.code), contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+            Text(metric.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+        Text(metric.value, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+private fun waterMetricIcon(code: String): ImageVector = when (code) {
+    "temperature" -> FishIcons.Droplet
+    "ph" -> FishIcons.Eye
+    "salinity", "specific_gravity" -> FishIcons.WaterLevel
+    else -> FishIcons.Tag
+}
+
+@Composable
+private fun FishDetailMetricCard(title: String, value: String, caption: String, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(caption, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+    }
+}
+
+@Composable
+private fun FishDetailLinkCard(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+        Icon(FishIcons.ArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun FishDetailTankCard(tank: Tank, photo: Photo?, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (photo == null) {
+            Box(Modifier.size(58.dp, 46.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.surfaceVariant), contentAlignment = Alignment.Center) {
+                Icon(FishIcons.Aquarium, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+            }
+        } else {
+            ManagedPhotoImage(photo, thumbnail = true, modifier = Modifier.size(58.dp, 46.dp).clip(MaterialTheme.shapes.small))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(tank.name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(waterTypeLabel(tank.type), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        }
+        Icon(FishIcons.ArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun FishDetailProfileCard(fish: Fish) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(MaterialTheme.colorScheme.surface)
+            .border(1.dp, MaterialTheme.colorScheme.outline, MaterialTheme.shapes.medium)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        FishDetailProfileRow("入缸日期", formatDate(fish.addedAt))
+        FishDetailProfileRow("出生日期", fish.birthDate?.let(::formatDate) ?: "未记录")
+        if (fish.status == FishStatus.deceased) FishDetailProfileRow("死亡日期", fish.deathDate?.let(::formatDate) ?: "未知")
+        FishDetailProfileRow("性别", fish.sex ?: "未记录")
+        FishDetailProfileRow("来源", fish.source ?: "未记录")
+        FishDetailProfileRow("备注", fish.notes?.takeIf { it.isNotBlank() } ?: "暂无")
+    }
+}
+
+@Composable
+private fun FishDetailProfileRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(64.dp))
+        Text(value, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+    }
+}
+
+/** 底部操作栏：编辑档案 + 添加记录（喂食 / 成长）。 */
+@Composable
+private fun FishDetailActionBar(
+    busy: Boolean,
+    menuOpen: Boolean,
+    onMenuOpenChange: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onQuickFeeding: () -> Unit,
+    onGrowthRecord: () -> Unit,
+    onFeedingRecords: () -> Unit,
+) {
+    Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            OutlinedButton(onClick = onEdit, enabled = !busy, modifier = Modifier.weight(1f).height(48.dp)) {
+                Icon(Icons.Outlined.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("编辑")
+            }
+            Box(Modifier.weight(1f)) {
+                Button(onClick = { onMenuOpenChange(true) }, enabled = !busy, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("添加记录")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenuOpenChange(false) }) {
+                    DropdownMenuItem(text = { Text("记录喂食") }, onClick = onQuickFeeding)
+                    DropdownMenuItem(text = { Text("记录成长（体长 / 体重）") }, onClick = onGrowthRecord)
+                    DropdownMenuItem(text = { Text("查看喂食记录") }, onClick = onFeedingRecords)
+                }
+            }
+        }
+    }
+}
+
+private fun fishEventLabel(event: FishEvent, tanks: List<Tank>): String = when (event.type) {
+    FishEventType.created -> "建立档案"
+    FishEventType.moved -> {
+        val from = tanks.firstOrNull { it.id == event.tankId }?.name ?: "原鱼缸"
+        val to = tanks.firstOrNull { it.id == event.targetTankId }?.name ?: "目标鱼缸"
+        "转缸：$from → $to"
+    }
+    FishEventType.statusChanged -> event.status?.label() ?: "状态变更"
+    FishEventType.archived -> "归档"
 }
 
 @Composable
@@ -486,4 +1101,3 @@ private fun todayStartOf(value: Long) = Calendar.getInstance().apply { timeInMil
 private fun formatDate(value: Long) = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(value))
 private fun formatDateTime(value: Long) = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(value))
 private fun Double.pretty() = if (this % 1.0 == 0.0) toLong().toString() else "%.1f".format(Locale.getDefault(), this)
-private fun FishStatus.label() = when (this) { FishStatus.active -> "在养"; FishStatus.quarantine -> "隔离"; FishStatus.transferred -> "已转出"; FishStatus.deceased -> "已故"; FishStatus.archived -> "已归档" }

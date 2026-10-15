@@ -10,15 +10,37 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -26,12 +48,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
+import com.guanyji.app.feature.overview.FishIcons
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-private enum class CareView(val title: String) { today("今日任务"), calendar("日历"), future("未来计划"), history("历史记录") }
+private enum class CareView(val title: String) { today("今日计划"), calendar("日历"), future("未来计划"), history("历史记录") }
+
+private val CareBlue = Color(0xFF087CEB)
+private val CareInk = Color(0xFF153B5B)
+private val CareMuted = Color(0xFF66839B)
+private val CareCanvas = Color(0xFFF1F8FC)
+private val CareLine = Color(0xFFDDECF5)
 
 @Composable
 fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: CareViewModel = viewModel(factory = CareViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
@@ -40,9 +69,11 @@ fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: Ca
     val records by vm.records.collectAsStateWithLifecycle()
     val tanks by vm.tanks.collectAsStateWithLifecycle()
     val fish by vm.fish.collectAsStateWithLifecycle()
-    var view by remember { mutableStateOf(CareView.today) }
+    var view by rememberSaveable { mutableStateOf(CareView.today) }
     var showEditor by remember { mutableStateOf(false) }
-    var selectedDay by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var selectedDay by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    var shownMonth by rememberSaveable { mutableLongStateOf(System.currentTimeMillis()) }
+    var historyType by rememberSaveable { mutableStateOf<CareRecordType?>(null) }
     var editing by remember { mutableStateOf<CareTask?>(null) }
     var completing by remember { mutableStateOf<CareTask?>(null) }
     var postponing by remember { mutableStateOf<CareTask?>(null) }
@@ -62,31 +93,61 @@ fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: Ca
     val cal = Calendar.getInstance().apply { timeInMillis = selectedDay; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }
     val dayStart = cal.timeInMillis
     val dayEnd = Calendar.getInstance().apply { timeInMillis = dayStart; add(Calendar.DAY_OF_MONTH, 1) }.timeInMillis
-    val displayTasks = when (view) {
-        CareView.today -> tasks.filter { (it.plannedAt in dayStart until dayEnd || it.status == CareTaskStatus.overdue) && it.status !in setOf(CareTaskStatus.cancelled, CareTaskStatus.completed, CareTaskStatus.skipped) }
-        CareView.calendar -> tasks.filter { it.plannedAt in dayStart until dayEnd }
-        CareView.future -> tasks.filter { it.plannedAt >= dayEnd && it.status in setOf(CareTaskStatus.pending, CareTaskStatus.overdue) }
-        CareView.history -> tasks.filter { it.status in setOf(CareTaskStatus.completed, CareTaskStatus.skipped, CareTaskStatus.cancelled) } + records.filter { record -> tasks.none { it.id == record.taskId } }.map { record -> CareTask(id = record.id, tankId = record.tankId, fishId = record.fishId, type = CareTaskType.valueOf(record.type.name), plannedAt = record.completedAt, recurrenceRule = null, status = CareTaskStatus.completed, notes = record.notes, createdAt = record.completedAt, updatedAt = record.completedAt) }
-    }.distinctBy { it.id }.sortedBy { if (view == CareView.history) -it.plannedAt else it.plannedAt }
-    Scaffold(floatingActionButton = { FloatingActionButton(onClick = { editing = null; showEditor = true }) { Icon(Icons.Outlined.Add, contentDescription = "新增养护任务") } }) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            PageTitle("养护计划", "${tasks.count { it.status == CareTaskStatus.pending || it.status == CareTaskStatus.overdue }} 项待处理")
-            ScrollableTabRow(selectedTabIndex = CareView.entries.indexOf(view), edgePadding = 0.dp) {
-                CareView.entries.forEach { item -> Tab(view == item, { view = item }, text = { Text(item.title) }) }
-            }
-            if (view == CareView.calendar) {
-                OutlinedButton(onClick = {
-                    val c = Calendar.getInstance().apply { timeInMillis = selectedDay }
-                    DatePickerDialog(context, { _, y, m, d -> selectedDay = Calendar.getInstance().apply { set(y, m, d, 0, 0, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis }, c.get(Calendar.YEAR), c.get(Calendar.MONTH), c.get(Calendar.DAY_OF_MONTH)).show()
-                }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Text("选择日期：${formatDate(selectedDay)}") }
-            }
-            if (displayTasks.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    EmptyState(when (view) { CareView.today -> "今天暂无任务"; CareView.calendar -> "这天没有计划"; CareView.future -> "暂无未来计划"; CareView.history -> "暂无养护历史" }, "新增任务后会保存在本机；通知关闭时也可在这里查看。")
+    val dayTasks = tasks.filter { it.plannedAt in dayStart until dayEnd && it.status != CareTaskStatus.cancelled }.sortedBy { it.plannedAt }
+    val todayStart = Calendar.getInstance().apply { timeInMillis = now; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+    val todayEnd = Calendar.getInstance().apply { timeInMillis = todayStart; add(Calendar.DAY_OF_MONTH, 1) }.timeInMillis
+    val todayTasks = tasks.filter { it.status in setOf(CareTaskStatus.pending, CareTaskStatus.overdue) && (it.plannedAt in todayStart until todayEnd || it.status == CareTaskStatus.overdue) }.sortedBy { it.plannedAt }
+    val futureTasks = tasks.filter { it.plannedAt >= todayEnd && it.status == CareTaskStatus.pending }.sortedBy { it.plannedAt }
+    val visibleRecords = records.filter { historyType == null || it.type == historyType }.sortedByDescending { it.completedAt }
+    Scaffold(containerColor = CareCanvas, floatingActionButton = { FloatingActionButton(onClick = { editing = null; showEditor = true }, containerColor = CareBlue, contentColor = Color.White) { Icon(Icons.Outlined.Add, contentDescription = "新增养护任务") } }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            CareHeader()
+            CareTabRow(view, onSelect = { view = it })
+            when (view) {
+                CareView.today -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { CareSectionHeading("今日养护", "${todayTasks.size} 项待完成", Icons.Outlined.DateRange) }
+                    if (todayTasks.isEmpty()) item { CareEmptyState("今天暂无计划任务", "你可以创建一次性或重复养护计划。", onAdd = { editing = null; showEditor = true }) }
+                    else items(todayTasks, key = { it.id }) { task ->
+                        CareTaskCard(task, tanks.firstOrNull { it.id == task.tankId }?.name, fish.firstOrNull { it.fish.id == task.fishId }?.fish?.name,
+                            onOpen = { completing = task }, onComplete = { completing = task }, onPostpone = { postponing = task }, onSkip = { vm.status(task.id, CareTaskStatus.skipped, {}, { message = it }) }, onEdit = { editing = task }, onCancel = { confirmingCancel = task })
+                    }
+                    if (todayTasks.isNotEmpty()) item { CareTipCard() }
                 }
-            } else LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(start = 0.dp, top = 12.dp, end = 0.dp, bottom = 88.dp)) {
-                items(displayTasks, key = { it.id }) { task -> CareTaskItem(task, tanks.firstOrNull { it.id == task.tankId }?.name, fish.firstOrNull { it.fish.id == task.fishId }?.fish?.name,
-                    onComplete = { completing = task }, onPostpone = { postponing = task }, onSkip = { vm.status(task.id, CareTaskStatus.skipped, {}, { message = it }) }, onEdit = { editing = task }, onCancel = { confirmingCancel = task }) }
+                CareView.calendar -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { CareCalendar(tasks, shownMonth, selectedDay, onMonthChange = { shownMonth = it }, onDaySelect = { selectedDay = it }) }
+                    item { CareSectionHeading(formatSelectedDate(selectedDay), "${dayTasks.size} 项计划", Icons.Outlined.DateRange) }
+                    if (dayTasks.isEmpty()) item { CareEmptyState("这天没有计划", "选择其他日期，或新增一项养护任务。", onAdd = { editing = null; showEditor = true }) }
+                    else items(dayTasks, key = { it.id }) { task ->
+                        CareTaskCard(task, tanks.firstOrNull { it.id == task.tankId }?.name, fish.firstOrNull { it.fish.id == task.fishId }?.fish?.name,
+                            onOpen = { completing = task }, onComplete = { completing = task }, onPostpone = { postponing = task }, onSkip = { vm.status(task.id, CareTaskStatus.skipped, {}, { message = it }) }, onEdit = { editing = task }, onCancel = { confirmingCancel = task })
+                    }
+                }
+                CareView.future -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    item { CareSectionHeading("未来计划", "${futureTasks.size} 项待执行", Icons.Outlined.DateRange) }
+                    if (futureTasks.isEmpty()) item { CareEmptyState("暂无未来计划", "建立计划后，会按日期显示在这里。", onAdd = { editing = null; showEditor = true }) }
+                    else {
+                        itemsIndexed(futureTasks, key = { _, task -> task.id }) { index, task ->
+                            val newDate = index == 0 || !sameDay(futureTasks[index - 1].plannedAt, task.plannedAt)
+                            if (newDate) CareDateGroupLabel(task.plannedAt, todayStart)
+                            CareTimelineItem(task, tanks.firstOrNull { it.id == task.tankId }?.name, fish.firstOrNull { it.fish.id == task.fishId }?.fish?.name,
+                                onOpen = { completing = task }, onComplete = { completing = task }, onPostpone = { postponing = task }, onSkip = { vm.status(task.id, CareTaskStatus.skipped, {}, { message = it }) }, onEdit = { editing = task }, onCancel = { confirmingCancel = task })
+                        }
+                    }
+                }
+                CareView.history -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 100.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item { CareSectionHeading("养护记录", "${visibleRecords.size} 条已保存记录", Icons.Outlined.DateRange) }
+                    item {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CareRecordType.entries.forEach { type ->
+                                FilterChip(selected = historyType == type, onClick = { historyType = if (historyType == type) null else type }, label = { Text(type.displayName()) })
+                            }
+                        }
+                    }
+                    if (visibleRecords.isEmpty()) item { CareEmptyState("暂无养护记录", if (historyType == null) "完成一项任务后，实际执行信息会保存在这里。" else "当前类型还没有已保存记录。", onAdd = if (historyType == null) ({ editing = null; showEditor = true }) else null) }
+                    else items(visibleRecords, key = { it.id }) { record ->
+                        CareHistoryCard(record, tanks.firstOrNull { it.id == record.tankId }?.name, fish.firstOrNull { it.fish.id == record.fishId }?.fish?.name)
+                    }
+                }
             }
         }
     }
@@ -110,23 +171,240 @@ fun CareScreen(openTaskId: String? = null, onTaskOpened: () -> Unit = {}, vm: Ca
 }
 
 @Composable
-private fun CareTaskItem(task: CareTask, tank: String?, fish: String?, onComplete: () -> Unit, onPostpone: () -> Unit, onSkip: () -> Unit, onEdit: () -> Unit, onCancel: () -> Unit) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(task.displayTitle(), style = MaterialTheme.typography.titleMedium)
-                Text(task.status.label(), color = if (task.status == CareTaskStatus.overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+private fun CareHeader() {
+    Box(Modifier.fillMaxWidth().height(172.dp)) {
+        androidx.compose.foundation.Image(painterResource(com.guanyji.app.R.drawable.care_header), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alignment = Alignment.Center)
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x33102C45), Color(0xB3123854)))))
+        Column(Modifier.align(Alignment.BottomStart).padding(start = 22.dp, bottom = 22.dp)) {
+            Text("养护", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text("科学养护 · 让鱼儿更健康", color = Color.White.copy(alpha = .94f), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun CareTabRow(selected: CareView, onSelect: (CareView) -> Unit) {
+    ScrollableTabRow(selectedTabIndex = CareView.entries.indexOf(selected), edgePadding = 12.dp, containerColor = Color.White, contentColor = CareBlue,
+        indicator = { positions -> androidx.compose.material3.TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(positions[CareView.entries.indexOf(selected)]), color = CareBlue, height = 3.dp) }) {
+        CareView.entries.forEach { item ->
+            Tab(selected == item, onClick = { onSelect(item) }, modifier = Modifier.height(52.dp), text = {
+                Text(item.title, color = if (selected == item) CareBlue else CareMuted, fontWeight = if (selected == item) FontWeight.SemiBold else FontWeight.Medium, maxLines = 1)
+            })
+        }
+    }
+}
+
+@Composable
+private fun CareSectionHeading(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = CareBlue, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(9.dp))
+        Text(title, color = CareInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(subtitle, color = CareMuted, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun CareTaskCard(task: CareTask, tank: String?, fish: String?, onOpen: () -> Unit, onComplete: () -> Unit, onPostpone: () -> Unit, onSkip: () -> Unit, onEdit: () -> Unit, onCancel: () -> Unit) {
+    Surface(Modifier.fillMaxWidth().clickable(onClickLabel = "查看${task.displayTitle()}详情", onClick = onOpen), shape = RoundedCornerShape(16.dp), color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, CareLine), shadowElevation = 1.dp) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CareTaskTypeIcon(task.type)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(task.displayTitle(), color = CareInk, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                    Text(listOfNotNull(tank, fish).joinToString(" · ").ifBlank { "未指定对象" }, color = CareMuted, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                CareStatusBadge(task.status)
             }
-            Text("计划：${formatDateTime(task.plannedAt)}")
-            task.postponedFrom?.let { Text("延期自：${formatDateTime(it)}", style = MaterialTheme.typography.bodySmall) }
-            Text("对象：${listOfNotNull(tank, fish).joinToString(" · ").ifBlank { "未指定" }}")
-            if (!task.notes.isNullOrBlank() && !task.notes.startsWith("water-change:")) Text(task.notes)
-            if (task.status == CareTaskStatus.pending || task.status == CareTaskStatus.overdue) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                TextButton(onClick = onComplete) { Text("完成") }; TextButton(onClick = onPostpone) { Text("延期") }; TextButton(onClick = onSkip) { Text("跳过") }; TextButton(onClick = onEdit) { Text("编辑") }; TextButton(onClick = onCancel) { Text("取消") }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.DateRange, null, tint = CareMuted, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(5.dp))
+                Text(formatDateTime(task.plannedAt), color = CareMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                if (task.status == CareTaskStatus.pending || task.status == CareTaskStatus.overdue) {
+                    TextButton(onClick = onComplete) { Text("完成") }
+                    TaskActionsMenu(onPostpone, onSkip, onEdit, onCancel)
+                }
+            }
+            if (!task.notes.isNullOrBlank() && !task.notes.startsWith("water-change:")) Text(task.notes, color = CareMuted, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun CareTaskTypeIcon(type: CareTaskType) {
+    val (icon, color, bg) = when (type) {
+        CareTaskType.water_change -> Triple(FishIcons.Droplet, Color(0xFF1689EA), Color(0xFFE0F2FF))
+        CareTaskType.feeding -> Triple(FishIcons.Fish, Color(0xFF14A88B), Color(0xFFE0F7F1))
+        CareTaskType.water_test, CareTaskType.salinity_test -> Triple(Icons.Outlined.Check, Color(0xFF8555D6), Color(0xFFF0E9FF))
+        CareTaskType.maintenance -> Triple(FishIcons.Aquarium, Color(0xFFEB842E), Color(0xFFFFF0E2))
+        CareTaskType.custom -> Triple(Icons.Outlined.Check, Color(0xFF507DA3), Color(0xFFEAF3F9))
+    }
+    Box(Modifier.size(46.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) { Icon(icon, contentDescription = type.displayName(), tint = color, modifier = Modifier.size(23.dp)) }
+}
+
+@Composable
+private fun CareStatusBadge(status: CareTaskStatus) {
+    val (label, foreground, background) = when (status) {
+        CareTaskStatus.pending -> Triple("待完成", Color(0xFFCE4961), Color(0xFFFFE8EC))
+        CareTaskStatus.overdue -> Triple("已逾期", Color(0xFFB33D30), Color(0xFFFFE6E1))
+        CareTaskStatus.completed -> Triple("已完成", Color(0xFF178A72), Color(0xFFE1F5EF))
+        CareTaskStatus.skipped -> Triple("已跳过", CareMuted, Color(0xFFEDF2F5))
+        CareTaskStatus.cancelled -> Triple("已取消", CareMuted, Color(0xFFEDF2F5))
+    }
+    Text(label, color = foreground, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Medium, modifier = Modifier.clip(RoundedCornerShape(50)).background(background).padding(horizontal = 10.dp, vertical = 5.dp))
+}
+
+@Composable
+private fun TaskActionsMenu(onPostpone: () -> Unit, onSkip: () -> Unit, onEdit: () -> Unit, onCancel: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }, modifier = Modifier.size(40.dp)) { Icon(Icons.Outlined.MoreVert, contentDescription = "更多任务操作", tint = CareMuted) }
+        DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+            listOf("延期" to onPostpone, "跳过" to onSkip, "编辑" to onEdit, "取消计划" to onCancel).forEach { (label, action) -> DropdownMenuItem(text = { Text(label) }, onClick = { expanded = false; action() }) }
+        }
+    }
+}
+
+@Composable
+private fun CareCalendar(tasks: List<CareTask>, month: Long, selectedDay: Long, onMonthChange: (Long) -> Unit, onDaySelect: (Long) -> Unit) {
+    val calendar = Calendar.getInstance().apply { timeInMillis = month; set(Calendar.DAY_OF_MONTH, 1) }
+    val year = calendar.get(Calendar.YEAR); val monthIndex = calendar.get(Calendar.MONTH)
+    val firstWeekday = (calendar.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY + 7) % 7
+    val days = calendar.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val today = Calendar.getInstance()
+    val taskDays = tasks.filter { it.status != CareTaskStatus.cancelled }.map { Calendar.getInstance().apply { timeInMillis = it.plannedAt; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis }.toSet()
+    Surface(shape = RoundedCornerShape(18.dp), color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, CareLine)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("${year}年${monthIndex + 1}月", color = CareInk, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                IconButton(onClick = { val c = Calendar.getInstance().apply { timeInMillis = month; add(Calendar.MONTH, -1) }; onMonthChange(c.timeInMillis) }) { Text("‹", color = CareBlue, fontSize = 28.sp) }
+                IconButton(onClick = { val c = Calendar.getInstance().apply { timeInMillis = month; add(Calendar.MONTH, 1) }; onMonthChange(c.timeInMillis) }) { Text("›", color = CareBlue, fontSize = 28.sp) }
+            }
+            Row(Modifier.fillMaxWidth()) { listOf("日", "一", "二", "三", "四", "五", "六").forEach { Text(it, Modifier.weight(1f), color = CareMuted, style = MaterialTheme.typography.labelMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center) } }
+            Spacer(Modifier.height(7.dp))
+            val cellCount = ((firstWeekday + days + 6) / 7) * 7
+            for (weekStart in 0 until cellCount step 7) {
+                Row(Modifier.fillMaxWidth()) {
+                    for (column in weekStart until weekStart + 7) {
+                        val number = column - firstWeekday + 1
+                        if (number !in 1..days) Spacer(Modifier.weight(1f).height(42.dp)) else {
+                            val dayCal = Calendar.getInstance().apply { set(year, monthIndex, number, 0, 0, 0); set(Calendar.MILLISECOND, 0) }
+                            val timestamp = dayCal.timeInMillis
+                            val chosen = sameDay(timestamp, selectedDay)
+                            val isToday = sameDay(timestamp, today.timeInMillis)
+                            val hasTasks = taskDays.any { sameDay(it, timestamp) }
+                            Column(Modifier.weight(1f).height(42.dp).clip(CircleShape).background(if (chosen) CareBlue else Color.Transparent).clickable { onDaySelect(timestamp) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                Text(number.toString(), color = if (chosen) Color.White else if (isToday) CareBlue else CareInk, fontWeight = if (chosen || isToday) FontWeight.Bold else FontWeight.Normal, style = MaterialTheme.typography.bodyMedium)
+                                Box(Modifier.padding(top = 2.dp).size(4.dp).clip(CircleShape).background(if (hasTasks) if (chosen) Color.White else CareBlue else Color.Transparent))
+                            }
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun CareTimelineItem(task: CareTask, tank: String?, fish: String?, onOpen: () -> Unit, onComplete: () -> Unit, onPostpone: () -> Unit, onSkip: () -> Unit, onEdit: () -> Unit, onCancel: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(25.dp).padding(top = 12.dp)) {
+            Box(Modifier.size(11.dp).clip(CircleShape).background(CareBlue))
+            Box(Modifier.width(1.dp).height(92.dp).background(CareLine))
+        }
+        Spacer(Modifier.width(6.dp))
+        Box(Modifier.weight(1f)) { CareTaskCard(task, tank, fish, onOpen, onComplete, onPostpone, onSkip, onEdit, onCancel) }
+    }
+}
+
+@Composable
+private fun CareDateGroupLabel(timestamp: Long, todayStart: Long) {
+    val zone = java.time.ZoneId.systemDefault()
+    val diff = java.time.Instant.ofEpochMilli(timestamp).atZone(zone).toLocalDate().toEpochDay() -
+        java.time.Instant.ofEpochMilli(todayStart).atZone(zone).toLocalDate().toEpochDay()
+    Row(Modifier.fillMaxWidth().padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(formatDate(timestamp) + "  " + weekday(timestamp), color = CareInk, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Text(if (diff == 1L) "明天" else "${diff}天后", color = CareBlue, style = MaterialTheme.typography.labelSmall, modifier = Modifier.clip(RoundedCornerShape(50)).background(Color(0xFFE1F1FF)).padding(horizontal = 9.dp, vertical = 5.dp))
+    }
+}
+
+@Composable
+private fun CareHistoryCard(record: CareRecord, tank: String?, fish: String?) {
+    var showDetails by remember(record.id) { mutableStateOf(false) }
+    Surface(onClick = { showDetails = true }, shape = RoundedCornerShape(16.dp), color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, CareLine)) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.Top) {
+            CareTaskTypeIcon(CareTaskType.valueOf(record.type.name))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Text(record.type.displayName(), color = CareInk, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Icon(Icons.Outlined.CheckCircle, null, tint = Color(0xFF21A083), modifier = Modifier.size(18.dp)) }
+                Text(listOfNotNull(tank, fish).joinToString(" · ").ifBlank { "未指定对象" }, color = CareMuted, style = MaterialTheme.typography.bodySmall)
+                recordSummary(record)?.let { Text(it, color = CareBlue, style = MaterialTheme.typography.bodySmall) }
+                if (!record.notes.isNullOrBlank()) Text(record.notes, color = CareMuted, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(formatDateTime(record.completedAt), color = CareMuted, style = MaterialTheme.typography.labelSmall)
+            }
+        }
+    }
+    if (showDetails) AlertDialog(
+        onDismissRequest = { showDetails = false },
+        title = { Text(record.type.displayName()) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("对象：${listOfNotNull(tank, fish).joinToString(" · ").ifBlank { "未指定" }}")
+                Text("完成时间：${formatDateTime(record.completedAt)}")
+                recordSummary(record)?.let { Text(it) }
+                Text("备注：${record.notes?.takeIf(String::isNotBlank) ?: "暂无记录"}")
+            }
+        },
+        confirmButton = { TextButton(onClick = { showDetails = false }) { Text("关闭") } },
+    )
+}
+
+private fun recordSummary(record: CareRecord): String? {
+    val payload = record.payloadJson?.takeIf(String::isNotBlank) ?: return null
+    return runCatching {
+        val json = org.json.JSONObject(payload)
+        when (record.type) {
+            CareRecordType.water_change -> json.optString("actual").takeIf(String::isNotBlank)?.let { "实际换水：$it" }
+            CareRecordType.feeding -> json.optString("actual").takeIf(String::isNotBlank)?.let { "投喂记录：$it" }
+            CareRecordType.water_test -> json.optString("actual").takeIf(String::isNotBlank)?.let { "检测记录：$it" }
+            CareRecordType.salinity_test -> json.optString("actual").takeIf(String::isNotBlank)?.let { "实测盐度：$it" }
+            CareRecordType.maintenance, CareRecordType.custom -> json.optString("actual").takeIf(String::isNotBlank)?.let { "执行内容：$it" }
+        }
+    }.getOrNull()
+}
+
+@Composable
+private fun CareEmptyState(title: String, detail: String, onAdd: (() -> Unit)?) {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp), color = Color.White, border = androidx.compose.foundation.BorderStroke(1.dp, CareLine)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 26.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(Icons.Outlined.CheckCircle, null, tint = Color(0xFF61A8D7), modifier = Modifier.size(30.dp))
+            Spacer(Modifier.height(8.dp)); Text(title, color = CareInk, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(4.dp)); Text(detail, color = CareMuted, style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            if (onAdd != null) { Spacer(Modifier.height(12.dp)); OutlinedButton(onClick = onAdd) { Icon(Icons.Outlined.Add, null); Spacer(Modifier.width(4.dp)); Text("新增计划") } }
+        }
+    }
+}
+
+@Composable
+private fun CareTipCard() {
+    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), color = Color(0xFFE7F5FC)) {
+        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Outlined.CheckCircle, null, tint = CareBlue, modifier = Modifier.size(25.dp)); Spacer(Modifier.width(10.dp))
+            Column { Text("养护小贴士", color = CareBlue, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold); Text("按计划观察水质与设备状态，记录实际测量结果。", color = CareMuted, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
+}
+
+private fun sameDay(first: Long, second: Long): Boolean {
+    val a = Calendar.getInstance().apply { timeInMillis = first }; val b = Calendar.getInstance().apply { timeInMillis = second }
+    return a.get(Calendar.YEAR) == b.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == b.get(Calendar.DAY_OF_YEAR)
+}
+private fun startOfDay(timestamp: Long) = Calendar.getInstance().apply { timeInMillis = timestamp; set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0); set(Calendar.MILLISECOND, 0) }.timeInMillis
+private fun weekday(timestamp: Long) = listOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")[Calendar.getInstance().apply { timeInMillis = timestamp }.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY]
+private fun formatSelectedDate(timestamp: Long) = SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(timestamp)) + "  " + weekday(timestamp)
+private fun CareRecordType.displayName() = CareTaskType.valueOf(name).displayName()
 
 @Composable
 private fun CareTaskEditor(existing: CareTask?, tanks: List<Tank>, fish: List<FishSummary>, onDismiss: () -> Unit, onSave: (CareTask, Int?, Boolean) -> Unit) {

@@ -9,11 +9,14 @@ import androidx.lifecycle.viewModelScope
 import com.guanyji.app.data.backup.BackupSummary
 import com.guanyji.app.data.backup.LocalBackupManager
 import com.guanyji.app.data.local.AppSetting
+import com.guanyji.app.data.local.CareTaskStatus
 import com.guanyji.app.data.local.DatabaseFactory
 import com.guanyji.app.data.repository.LocalRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -37,6 +40,20 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
     val storage = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val databaseStorage = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val photoStorage = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val overview = combine(
+        repository.allTanks(),
+        repository.statisticsFish(),
+        repository.careTasks(),
+        repository.statisticsWaterTests(),
+    ) { tanks, fish, tasks, tests ->
+        ProfileOverviewState.Ready(
+            tanks = tanks.count { it.status.name == "active" },
+            fish = fish.count { it.status.name == "active" || it.status.name == "quarantine" },
+            tasks = tasks.count { it.status == CareTaskStatus.pending || it.status == CareTaskStatus.overdue },
+            waterAlerts = countLatestOutOfRangeValues(tests),
+        ) as ProfileOverviewState
+    }.catch { failure -> emit(ProfileOverviewState.Failed(failure.message ?: "本地数据读取失败")) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ProfileOverviewState.Loading)
 
     init { refreshStorage() }
 
@@ -111,6 +128,12 @@ class ProfileViewModel(application: Application) : AndroidViewModel(application)
             }
         }
     }
+}
+
+sealed interface ProfileOverviewState {
+    data object Loading : ProfileOverviewState
+    data class Ready(val tanks: Int, val fish: Int, val tasks: Int, val waterAlerts: Int) : ProfileOverviewState
+    data class Failed(val message: String) : ProfileOverviewState
 }
 
 sealed interface ProfileOperation {

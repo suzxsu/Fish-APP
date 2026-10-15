@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import com.guanyji.app.data.local.CareNotificationScheduler
 import com.guanyji.app.data.local.*
 import com.guanyji.app.data.repository.LocalRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
@@ -19,7 +20,22 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.ZoneId
 
-data class OverviewSnapshot(val tanks: List<TankSummary>, val fish: List<FishSummary>, val tasks: List<CareTask>)
+/** 总览页“最近记录”所需的原始数据，全部来自本地数据库查询。 */
+data class RecentRecordsData(
+    val feedings: List<FeedingEventWithTargets>,
+    val waterTests: List<WaterTestWithValues>,
+    val growthRecords: List<GrowthRecord>,
+)
+
+data class OverviewSnapshot(
+    val tanks: List<TankSummary>,
+    val fish: List<FishSummary>,
+    val tasks: List<CareTask>,
+    val careRecords: List<CareRecord>,
+    val todayFeedings: Int,
+    val todayWaterTestTanks: Int,
+    val records: RecentRecordsData,
+)
 
 class OverviewViewModel(application: Application) : AndroidViewModel(application) {
     private val database = DatabaseFactory.create(application)
@@ -32,20 +48,40 @@ class OverviewViewModel(application: Application) : AndroidViewModel(application
     val tanks = repository.tanks().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val fish = repository.allFish(dayStart, dayEnd).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     val tasks = repository.careTasks().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val careRecords = repository.careRecords().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val feedings = repository.statisticsFeedings().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val allWaterTests = repository.statisticsWaterTests().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val growthRecords = repository.statisticsGrowth().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val waterFlows = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.flow.StateFlow<List<WaterTestWithValues>>>()
     private val photoFlows = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.flow.StateFlow<Photo?>>()
     fun waterTests(tankId: String) = waterFlows.getOrPut(tankId) { repository.waterTestsForTank(tankId).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList()) }
     fun photo(id: String?) = id?.let { key -> photoFlows.getOrPut(key) { repository.photo(key).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null) } }
 
-    val state = combine(tanks, fish, tasks) { tankRows, fishRows, allTasks ->
-        val tankSummaries = tankRows.filter { it.tank.status == TankStatus.active }
-        val todayTasks = allTasks.filter { task ->
-            (task.plannedAt in dayStart until dayEnd || task.status == CareTaskStatus.overdue || task.status == CareTaskStatus.pending && task.plannedAt < dayStart) &&
-                task.status in setOf(CareTaskStatus.pending, CareTaskStatus.overdue)
-        }.sortedBy { it.plannedAt }
-        Triple(tankSummaries, fishRows, todayTasks)
-    }.map { (tankRows, fishRows, todayTasks) -> OverviewSnapshot(tankRows, fishRows, todayTasks) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OverviewSnapshot(emptyList(), emptyList(), emptyList()))
+    private val recentRecords: Flow<RecentRecordsData> = combine(feedings, allWaterTests, growthRecords) { feedingRows, testRows, growthRows ->
+        RecentRecordsData(feedingRows, testRows, growthRows)
+    }
+
+    val state = combine(
+        combine(tanks, fish, tasks) { tankRows, fishRows, allTasks ->
+            val tankSummaries = tankRows.filter { it.tank.status == TankStatus.active }
+            val todayTasks = allTasks.filter { task ->
+                task.plannedAt in dayStart until dayEnd && task.status in setOf(CareTaskStatus.pending, CareTaskStatus.overdue, CareTaskStatus.completed)
+            }.sortedBy { it.plannedAt }
+            Triple(tankSummaries, fishRows, todayTasks)
+        },
+        careRecords,
+        recentRecords,
+    ) { (tankRows, fishRows, todayTasks), recordRows, rawRecords ->
+        OverviewSnapshot(
+            tanks = tankRows,
+            fish = fishRows,
+            tasks = todayTasks,
+            careRecords = recordRows.filter { it.completedAt in dayStart until dayEnd },
+            todayFeedings = rawRecords.feedings.count { it.event.fedAt in dayStart until dayEnd },
+            todayWaterTestTanks = rawRecords.waterTests.filter { it.test.measuredAt in dayStart until dayEnd }.distinctBy { it.test.tankId }.size,
+            records = rawRecords,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OverviewSnapshot(emptyList(), emptyList(), emptyList(), emptyList(), 0, 0, RecentRecordsData(emptyList(), emptyList(), emptyList())))
 
     fun completeTask(task: CareTask, done: () -> Unit, failed: (String) -> Unit) = viewModelScope.launch {
         try {
