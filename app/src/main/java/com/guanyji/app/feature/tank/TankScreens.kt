@@ -9,7 +9,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -34,16 +33,21 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
 import com.guanyji.app.data.repository.waterChangeTaskMarker
+import com.guanyji.app.feature.photo.ManagedCardPhoto
 import com.guanyji.app.feature.photo.ManagedPhotoImage
 import com.guanyji.app.feature.photo.PhotoPickerField
 import com.guanyji.app.feature.photo.PhotoViewModel
 import com.guanyji.app.feature.photo.PhotoViewModelFactory
+import com.guanyji.app.feature.overview.FishIcons
+import com.guanyji.app.ui.theme.AquariumCardColors
+import com.guanyji.app.ui.theme.AquariumCardTokens
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import coil.request.ImageRequest
@@ -73,42 +77,43 @@ private fun parameterLabel(code: String) = (freshwaterParameters + saltwaterPara
 
 @Composable
 fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewModel = viewModel(factory = TankViewModel.factory(LocalContext.current.applicationContext as android.app.Application))) {
-    val tankData by vm.tanks.collectAsStateWithLifecycle()
-    val tanks = tankData.orEmpty()
+    val cardState by vm.cards.collectAsStateWithLifecycle()
+    val tanks = (cardState as? TankCardsState.Success)?.tanks.orEmpty()
     var search by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TankFilter.all) }
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    val visible = tanks.filter { summary ->
-        val tank = summary.tank
+    val visible = tanks.filter { card ->
         val query = search.trim()
-        val typeLabel = if (tank.type == TankType.freshwater) "淡水" else "海水"
-        val matches = query.isEmpty() || tank.name.contains(query, ignoreCase = true) || typeLabel.contains(query, ignoreCase = true)
+        val typeLabel = if (card.type == TankType.freshwater) "淡水" else "海水"
+        val matches = query.isEmpty() || card.name.contains(query, ignoreCase = true) || typeLabel.contains(query, ignoreCase = true)
         matches && when (filter) {
-            TankFilter.all -> tank.status == TankStatus.active
-            TankFilter.freshwater -> tank.status == TankStatus.active && tank.type == TankType.freshwater
-            TankFilter.saltwater -> tank.status == TankStatus.active && tank.type == TankType.saltwater
-            TankFilter.archived -> tank.status == TankStatus.archived
+            TankFilter.all -> card.status == TankStatus.active
+            TankFilter.freshwater -> card.status == TankStatus.active && card.type == TankType.freshwater
+            TankFilter.saltwater -> card.status == TankStatus.active && card.type == TankType.saltwater
+            TankFilter.archived -> card.status == TankStatus.archived
         }
     }
     Scaffold(containerColor = Color(0xFFF2F8FC), contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Box(Modifier.testTag("tank-list-screen")) {
-                TankListHeader(tanks.count { it.tank.status == TankStatus.active }, search, { search = it }, onCreate)
+                TankListHeader(tanks.count { it.status == TankStatus.active }, search, { search = it }, onCreate)
             }
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 TankFilter.entries.forEach { item -> FilterChip(selected = filter == item, onClick = { filter = item }, label = { Text(item.label) }, colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Color(0xFF1687E8), selectedLabelColor = Color.White)) }
             }
-            if (tankData == null) {
+            if (cardState is TankCardsState.Loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { LoadingState() }
+            } else if (cardState is TankCardsState.Failed) {
+                Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) { ErrorState((cardState as TankCardsState.Failed).message, onRetry = vm::retryCards) }
             } else if (visible.isEmpty()) {
                 Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     EmptyState(if (filter == TankFilter.archived) "暂无归档鱼缸" else if (tanks.isEmpty()) "开启你的第一座鱼缸" else "没有匹配的鱼缸", if (search.isBlank()) "创建鱼缸后，在这里管理环境与养护记录。" else "没有匹配的鱼缸，请尝试其他名称。")
                     if (filter != TankFilter.archived) Button(onClick = onCreate, modifier = Modifier.padding(top = 16.dp)) { Text("创建鱼缸") }
                 }
             } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 158.dp), state = gridState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(visible, key = { it.tank.id }) { summary ->
-                    val photo by remember(summary.tank.photoId) { vm.photo(summary.tank.photoId) }.collectAsStateWithLifecycle()
-                    TankCard(summary, photo, onClick = { onOpen(summary.tank.id) })
+                items(visible, key = { it.id }) { card ->
+                    val photo by remember(card.photoId) { vm.photo(card.photoId) }.collectAsStateWithLifecycle()
+                    TankCard(card, photo, onClick = { onOpen(card.id) })
                 }
                 if (filter != TankFilter.archived) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { CareTip() }
             }
@@ -117,25 +122,195 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
 }
 
 @Composable
-private fun TankCard(summary: TankSummary, photo: Photo?, onClick: () -> Unit) {
-    val tank = summary.tank
-    Card(Modifier.fillMaxWidth().height(278.dp).clickable(onClick = onClick), shape = MaterialTheme.shapes.large, colors = CardDefaults.cardColors(containerColor = Color.White), elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)) {
-        Column {
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                ManagedPhotoImage(photo, thumbnail = true, modifier = Modifier.fillMaxSize())
-                if (photo != null) Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0x66001F39), Color.Transparent, Color(0x33001F39)))))
-                TankBadge(if (tank.type == TankType.freshwater) "淡水缸" else "海水缸", Color(0xFF1687E8), Modifier.align(Alignment.TopStart).padding(8.dp))
-                TankBadge(if (tank.status == TankStatus.archived) "已归档" else "在养", if (tank.status == TankStatus.archived) Color(0xFF73869A) else Color(0xFF16A98A), Modifier.align(Alignment.TopEnd).padding(8.dp))
-            }
-            Column(Modifier.fillMaxWidth().height(114.dp).background(Brush.verticalGradient(listOf(Color(0xFF07547A), Color(0xFF087E9C)))).padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(tank.name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = Color.White, maxLines = 1)
-                    Text("›", color = Color.White, style = MaterialTheme.typography.titleMedium)
+private fun TankCard(card: TankCardUiModel, photo: Photo?, onClick: () -> Unit) {
+    AquariumCardShell(
+        accent = card.type.tankCardAccent(),
+        onClick = onClick,
+        onClickLabel = "查看${card.name}详情",
+        modifier = Modifier.testTag("tank-card-${card.id}"),
+        imageContent = { TankCardImage(card.type, photo) },
+        overlayContent = {
+            AquariumTypeBadge(
+                label = card.typeLabel,
+                accent = card.type.tankCardBadgeAccent(),
+                modifier = Modifier.align(Alignment.TopStart).padding(
+                    start = AquariumCardTokens.CardTypeBadgeInset,
+                    top = AquariumCardTokens.CardTypeBadgeTopInset,
+                ),
+            )
+            TankBadge(
+                label = card.statusLabel,
+                color = card.status.tankCardStatusBadgeAccent(),
+                modifier = Modifier.align(Alignment.TopEnd).padding(
+                    end = AquariumCardTokens.CardTypeBadgeInset,
+                    top = AquariumCardTokens.CardTypeBadgeTopInset,
+                ),
+            )
+        },
+        infoContent = { TankCardInfo(card) },
+    )
+}
+
+@Composable
+private fun TankCardImage(type: TankType, photo: Photo?) {
+    ManagedCardPhoto(
+        photo = photo,
+        contentDescription = "鱼缸照片",
+        modifier = Modifier.fillMaxSize(),
+        placeholder = { label, _ -> TankCardPhotoPlaceholder(type, label) },
+    )
+}
+
+@Composable
+private fun TankCardInfo(card: TankCardUiModel) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(
+            start = AquariumCardTokens.CardBodyInset,
+            end = AquariumCardTokens.CardBodyInset,
+            top = AquariumCardTokens.CardBodyInset,
+            bottom = AquariumCardTokens.CardBodyBottomInset,
+        ),
+        verticalArrangement = Arrangement.spacedBy(AquariumCardTokens.CardTextRowSpacing),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = card.name,
+                modifier = Modifier.weight(1f),
+                fontSize = AquariumCardTokens.CardTitleFontSize,
+                lineHeight = AquariumCardTokens.CardTitleLineHeight,
+                fontWeight = FontWeight.SemiBold,
+                color = AquariumCardColors.CardInk,
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+            Icon(
+                imageVector = FishIcons.ArrowRight,
+                contentDescription = null,
+                tint = AquariumCardColors.CardSecondaryInk,
+                modifier = Modifier.size(AquariumCardTokens.CardArrowSize),
+            )
+        }
+        Text(
+            text = "${card.capacityLabel} · 在养 ${card.activeFishCount} 条",
+            fontSize = AquariumCardTokens.CardSecondaryFontSize,
+            lineHeight = AquariumCardTokens.CardSecondaryLineHeight,
+            color = AquariumCardColors.CardSecondaryInk,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+        card.metrics.chunked(2).forEach { rowMetrics ->
+            Row(horizontalArrangement = Arrangement.spacedBy(AquariumCardTokens.FishCardMetricItemGap)) {
+                rowMetrics.forEach { metric ->
+                    TankWaterMetric(metric, Modifier.weight(1f))
                 }
-                Text("${tank.capacityValue?.let { "${it.pretty()} ${tank.capacityUnit.orEmpty()}${if (tank.capacityIsEstimated) " · 估算" else ""}" } ?: "容量未记录"}  ·  在养 ${summary.activeFishCount} 条", style = MaterialTheme.typography.labelSmall, color = Color(0xFFE4F6FF), maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                Text("换水  ${summary.lastWaterChangeAt?.let(::shortDate) ?: "暂无"}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFC8E9F8), maxLines = 1)
-                Text("水质  ${summary.lastWaterTestAt?.let(::shortDate) ?: "暂无"}", style = MaterialTheme.typography.labelSmall, color = Color(0xFFC8E9F8), maxLines = 1)
             }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(AquariumCardTokens.FishCardIconGap),
+        ) {
+            Icon(
+                imageVector = FishIcons.Fish,
+                contentDescription = null,
+                tint = AquariumCardColors.CardMetricInk.copy(alpha = 0.85f),
+                modifier = Modifier.size(AquariumCardTokens.CardFishIconSize),
+            )
+            Text(
+                text = "今日喂食",
+                fontSize = AquariumCardTokens.CardMetricFontSize,
+                lineHeight = AquariumCardTokens.CardMetricLineHeight,
+                color = AquariumCardColors.CardSecondaryInk,
+                maxLines = 1,
+            )
+            Text(
+                text = card.feedingLabel,
+                fontSize = AquariumCardTokens.CardMetricValueFontSize,
+                lineHeight = AquariumCardTokens.CardMetricValueLineHeight,
+                color = AquariumCardColors.CardMetricInk,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Text(
+            text = "检测 ${card.latestWaterTestAt?.let(::shortDate) ?: "--"} · 换水 ${card.lastWaterChangeAt?.let(::shortDate) ?: "--"}",
+            fontSize = AquariumCardTokens.CardMetricFontSize,
+            lineHeight = AquariumCardTokens.CardMetricLineHeight,
+            color = AquariumCardColors.CardSecondaryInk,
+            maxLines = 1,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun TankWaterMetric(metric: TankWaterMetricUiModel, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AquariumCardTokens.FishCardMetricIconGap),
+    ) {
+        Icon(
+            imageVector = tankMetricIcon(metric.code),
+            contentDescription = null,
+            tint = AquariumCardColors.CardMetricInk.copy(alpha = 0.85f),
+            modifier = Modifier.size(AquariumCardTokens.FishCardMetricIconSize),
+        )
+        Column {
+            Text(
+                text = metric.label,
+                fontSize = AquariumCardTokens.CardMetricFontSize,
+                lineHeight = AquariumCardTokens.CardMetricLineHeight,
+                color = AquariumCardColors.CardSecondaryInk,
+                maxLines = 1,
+            )
+            Text(
+                text = metric.value,
+                fontSize = AquariumCardTokens.CardMetricValueFontSize,
+                lineHeight = AquariumCardTokens.CardMetricValueLineHeight,
+                color = AquariumCardColors.CardMetricInk,
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+private fun tankMetricIcon(code: String) = when (code) {
+    "temperature" -> FishIcons.Droplet
+    "ph" -> FishIcons.Eye
+    else -> FishIcons.WaterLevel
+}
+
+@Composable
+private fun TankCardPhotoPlaceholder(type: TankType, label: String) {
+    val accent = type.tankCardAccent()
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        accent.copy(alpha = 0.42f),
+                        AquariumCardColors.CardTop,
+                        AquariumCardColors.CardBottom,
+                    ),
+                ),
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Icon(
+                imageVector = FishIcons.Aquarium,
+                contentDescription = null,
+                tint = AquariumCardColors.PlaceholderInk,
+                modifier = Modifier.size(28.dp),
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = AquariumCardColors.PlaceholderText,
+            )
         }
     }
 }
@@ -160,7 +335,24 @@ private fun TankListHeader(activeCount: Int, search: String, onSearch: (String) 
 
 @Composable
 private fun TankBadge(label: String, color: Color, modifier: Modifier = Modifier) {
-    Surface(modifier = modifier, shape = MaterialTheme.shapes.extraLarge, color = color, contentColor = Color.White) { Text(label, Modifier.padding(horizontal = 9.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall) }
+    Surface(
+        modifier = modifier,
+        shape = AquariumCardTokens.TypeBadgeShape,
+        color = color,
+        contentColor = AquariumCardTokens.TypeBadgeTextColor,
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(
+                horizontal = AquariumCardTokens.TypeBadgeHorizontalInset,
+                vertical = AquariumCardTokens.TypeBadgeVerticalInset,
+            ),
+            fontSize = AquariumCardTokens.CardCaptionFontSize,
+            lineHeight = AquariumCardTokens.CardCaptionLineHeight,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+        )
+    }
 }
 
 @Composable
@@ -334,8 +526,8 @@ fun TankDetailScreen(tankId: String, onBack: () -> Unit, onEdit: () -> Unit, onO
                 }
                 Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 18.dp, vertical = 16.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        TankBadge(if (tank.type == TankType.freshwater) "淡水缸" else "海水缸", Color(0xFF1687E8))
-                        TankBadge(if (tank.status == TankStatus.archived) "已归档" else "在养", if (tank.status == TankStatus.archived) Color(0xFF73869A) else Color(0xFF16A98A))
+                        TankBadge(if (tank.type == TankType.freshwater) "淡水缸" else "海水缸", tank.type.tankCardBadgeAccent())
+                        TankBadge(if (tank.status == TankStatus.archived) "已归档" else "在养", tank.status.tankCardStatusBadgeAccent())
                     }
                     Text(tank.name, style = MaterialTheme.typography.headlineSmall, color = Color.White, modifier = Modifier.padding(top = 8.dp).testTag("tank-detail-title"))
                     tank.notes?.takeIf { it.isNotBlank() }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = Color(0xFFE1F4FF), maxLines = 2) }

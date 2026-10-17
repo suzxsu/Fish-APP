@@ -121,6 +121,38 @@ internal object FishIcons {
         }.build()
     }
 
+    val Clock: ImageVector by lazy {
+        ImageVector.Builder(key("clock"), 24.dp, 24.dp, 24f, 24f).apply {
+            path(stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+                moveTo(12f, 3.5f)
+                curveTo(16.7f, 3.5f, 20.5f, 7.3f, 20.5f, 12f)
+                curveTo(20.5f, 16.7f, 16.7f, 20.5f, 12f, 20.5f)
+                curveTo(7.3f, 20.5f, 3.5f, 16.7f, 3.5f, 12f)
+                curveTo(3.5f, 7.3f, 7.3f, 3.5f, 12f, 3.5f)
+                close()
+                moveTo(12f, 7.5f)
+                verticalLineTo(12.2f)
+                lineTo(15.7f, 14.4f)
+            }
+        }.build()
+    }
+
+    /** 异常状态提示图标：让「隔离 / 已转出 / 已故 / 已归档」不只靠颜色区分。 */
+    val Alert: ImageVector by lazy {
+        ImageVector.Builder(key("alert"), 24.dp, 24.dp, 24f, 24f).apply {
+            path(stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {
+                moveTo(12f, 4.2f)
+                lineTo(21f, 19.6f)
+                lineTo(3f, 19.6f)
+                close()
+                moveTo(12f, 10.2f)
+                verticalLineTo(14.6f)
+                moveTo(12f, 16.9f)
+                verticalLineTo(17f)
+            }
+        }.build()
+    }
+
     val Droplet: ImageVector by lazy {
         ImageVector.Builder(key("droplet"), 24.dp, 24.dp, 24f, 24f).apply {
             path(stroke = SolidColor(Color.Black), strokeLineWidth = 1.8f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round) {

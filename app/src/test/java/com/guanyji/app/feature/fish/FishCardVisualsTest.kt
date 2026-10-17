@@ -17,11 +17,13 @@ class FishCardVisualsTest {
         val model = fishCardModel(
             row = summary(fish = fish(addedAt = addedAt, name = "小丑", species = "小丑鱼"), lastLength = 2.0, lastLengthUnit = "cm", todayFeedings = 2),
             tanks = listOf(tank(TankType.saltwater, "我的海水缸")),
+            lengthTargetUnit = "cm",
             today = day(2025, Calendar.OCTOBER, 15),
         )
         assertEquals("小丑", model.name)
-        assertEquals("小丑鱼 · 海水", model.speciesLine)
+        assertEquals("小丑鱼", model.speciesLine)
         assertEquals("我的海水缸", model.tankLine)
+        assertEquals("海水缸", model.tankTypeLabel)
         assertEquals("在养", model.statusLabel)
         assertEquals("378 天", model.daysLabel)
         assertEquals("2 cm", model.lengthLabel)
@@ -32,11 +34,13 @@ class FishCardVisualsTest {
         val model = fishCardModel(
             row = summary(fish = fish(addedAt = day(2025, Calendar.JANUARY, 1), species = null), lastLength = null, lastLengthUnit = null, todayFeedings = 0),
             tanks = listOf(tank(TankType.freshwater, "水草缸")),
+            lengthTargetUnit = "cm",
             today = day(2025, Calendar.JANUARY, 11),
         )
-        assertEquals("鱼种未记录 · 淡水", model.speciesLine)
+        assertEquals("鱼种未记录", model.speciesLine)
+        assertEquals("淡水缸", model.tankTypeLabel)
         assertEquals("10 天", model.daysLabel)
-        assertEquals("暂无记录", model.lengthLabel)
+        assertEquals("--", model.lengthLabel)
         assertEquals("暂无记录", model.feedingLabel)
     }
 
@@ -53,20 +57,22 @@ class FishCardVisualsTest {
             today = day(2025, Calendar.OCTOBER, 15),
         )
         assertEquals("鱼缸未找到", model.tankLine)
-        // 鱼缸不存在时不推测水体类型，只展示真实鱼种。
+        // 鱼缸不存在时不推测水体类型，也不显示类型标签。
         assertEquals("小丑鱼", model.speciesLine)
+        assertEquals(null, model.tankTypeLabel)
         assertEquals("78 天", model.daysLabel)
         assertEquals("3.4", model.lengthLabel)
         assertEquals("已故", model.statusLabel)
     }
 
     @Test fun cardLengthLabelRejectsInvalidValuesAndMissingUnits() {
-        assertEquals("暂无记录", cardLengthLabel(null, "cm"))
-        assertEquals("暂无记录", cardLengthLabel(0.0, "cm"))
-        assertEquals("暂无记录", cardLengthLabel(-1.0, "cm"))
-        assertEquals("暂无记录", cardLengthLabel(Double.NaN, "cm"))
+        assertEquals("--", cardLengthLabel(null, "cm"))
+        assertEquals("--", cardLengthLabel(0.0, "cm"))
+        assertEquals("--", cardLengthLabel(-1.0, "cm"))
+        assertEquals("--", cardLengthLabel(Double.NaN, "cm"))
         assertEquals("7", cardLengthLabel(7.0, null))
-        assertEquals("7 cm", cardLengthLabel(7.0, "cm"))
+        assertEquals("7 cm", cardLengthLabel(7.0, "cm", "cm"))
+        assertEquals("2.756 in", cardLengthLabel(7.0, "cm", "in"))
     }
 
     @Test fun statusLabelsAndPalettesCoverEveryRealStatus() {

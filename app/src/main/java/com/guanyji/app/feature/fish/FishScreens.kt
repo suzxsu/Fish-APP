@@ -59,6 +59,7 @@ import com.guanyji.app.R
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
 import com.guanyji.app.feature.overview.DashboardTokens
+import com.guanyji.app.ui.theme.AquariumCardTokens
 import com.guanyji.app.feature.overview.FishIcons
 import com.guanyji.app.feature.photo.*
 import java.text.SimpleDateFormat
@@ -79,6 +80,7 @@ private val statuses = listOf(null to "全部", FishStatus.active to "在养", F
 fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (String) -> Unit, vm: FishViewModel = viewModel(factory = FishViewModel.factory(LocalContext.current.applicationContext as Application))) {
     val data by vm.fish.collectAsStateWithLifecycle()
     val tankData by vm.tanks.collectAsStateWithLifecycle()
+    val lengthUnit by vm.lengthUnit.collectAsStateWithLifecycle()
     val tanks = tankData.orEmpty()
     var search by rememberSaveable { mutableStateOf("") }
     var tankId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -153,7 +155,7 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
                 } else {
                     itemsIndexed(rows, key = { _, row -> row.fish.id }) { index, row ->
                         val photo by remember(row.fish.coverPhotoId) { vm.photo(row.fish.coverPhotoId) }.collectAsStateWithLifecycle()
-                        val model = remember(row, tanks) { fishCardModel(row, tanks) }
+                        val model = remember(row, tanks, lengthUnit) { fishCardModel(row, tanks, lengthUnit) }
                         FishTradingCard(
                             model = model,
                             photo = photo,
@@ -500,7 +502,6 @@ private fun FishDetailHero(
     onStatus: (FishStatus) -> Unit,
     onArchive: () -> Unit,
 ) {
-    val palette = remember(fish.status) { fish.status.cardPalette() }
     val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxWidth().heightIn(min = 320.dp + statusBarInset)) {
         if (photo == null) FishDetailPhotoFallback()
@@ -547,7 +548,7 @@ private fun FishDetailHero(
             modifier = Modifier.align(Alignment.BottomStart).padding(14.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FishCardStatus(fish.status.label(), palette)
+            FishCardStatus(fish.status)
             FishDetailIdentityPanel(
                 fish = fish,
                 tankType = tankType,
