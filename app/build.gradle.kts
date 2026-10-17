@@ -48,6 +48,8 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.9.1")
     implementation("io.coil-kt:coil-compose:2.7.0")
     implementation("androidx.exifinterface:exifinterface:1.4.1")
+    // 网格长按拖拽排序；Compose 无官方重排 API，选该库因为它原生支持 LazyVerticalGrid 与自动滚动。
+    implementation("sh.calvin.reorderable:reorderable:3.1.0")
     implementation("androidx.room:room-runtime:2.7.2")
     implementation("androidx.room:room-ktx:2.7.2")
     ksp("androidx.room:room-compiler:2.7.2")

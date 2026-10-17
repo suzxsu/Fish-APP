@@ -9,8 +9,13 @@ import com.guanyji.app.data.local.*
 import com.guanyji.app.data.photo.ManagedPhotoFileStore
 import com.guanyji.app.data.photo.PhotoRepository
 import com.guanyji.app.data.repository.DefaultLengthUnit
+import com.guanyji.app.data.repository.FishOrderKey
+import com.guanyji.app.data.repository.FishSortKey
 import com.guanyji.app.data.repository.LocalRepository
+import com.guanyji.app.data.repository.encodeOrderIds
 import com.guanyji.app.data.repository.preferredLengthUnit
+import com.guanyji.app.data.repository.savedOrder
+import com.guanyji.app.data.repository.savedSortName
 import com.guanyji.app.core.time.dayBoundsFlow
 import com.guanyji.app.core.time.deviceDayBounds
 import kotlinx.coroutines.CancellationException
@@ -73,6 +78,25 @@ class FishViewModel(application: Application) : AndroidViewModel(application) {
     val lengthUnit = repository.settings()
         .map(::preferredLengthUnit)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DefaultLengthUnit)
+
+    /** 「自定义顺序」的已保存顺序；存 app_settings，规则见 ListOrderPreferences。 */
+    val listOrder = repository.settings()
+        .map { rows -> rows.savedOrder(FishOrderKey) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 拖拽松手或无障上移/下移后落盘；顺序保存失败只提示，不影响列表状态。 */
+    fun saveListOrder(ids: List<String>, onError: (String) -> Unit = {}) = run({}, onError) {
+        repository.saveSetting(AppSetting(FishOrderKey, encodeOrderIds(ids), System.currentTimeMillis()))
+    }
+
+    /** 上次选中的排序方式枚举名；为空时页面用默认排序。 */
+    val listSort = repository.settings()
+        .map { rows -> rows.savedSortName(FishSortKey) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun saveListSort(name: String) = run({}, {}) {
+        repository.saveSetting(AppSetting(FishSortKey, name, System.currentTimeMillis()))
+    }
     fun summary(id: String) = dayBounds().let { (start, end) -> repository.fishSummary(id, start, end) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     fun detailState(id: String) = dayBounds().let { (start, end) -> repository.fishSummary(id, start, end) }
         .map<FishSummary?, FishLoadState<FishSummary>> { fishLoadState(it) }

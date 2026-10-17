@@ -7,3 +7,5 @@ local.properties
 .dsh-vision-router/
 # 本地构建日志
 build-debug.log
+# 本地验证截图（模拟器/真机走查产物）
+shots/

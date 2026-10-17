@@ -67,6 +67,8 @@ internal fun FishTradingCard(
     modifier: Modifier = Modifier,
     animateEntrance: Boolean = true,
     onEntranceShown: (String) -> Unit = {},
+    dragging: Boolean = false,
+    dragHandleModifier: Modifier = Modifier,
 ) {
     var entered by remember(model.id) { mutableStateOf(!animateEntrance) }
     val entrance by animateFloatAsState(
@@ -108,6 +110,8 @@ internal fun FishTradingCard(
             FishCardEditButton(model.name, onEdit, Modifier.align(Alignment.TopEnd))
         },
         infoContent = { FishCardInfo(model = model) },
+        lifted = dragging,
+        dragHandleModifier = dragHandleModifier,
     )
 }
 
