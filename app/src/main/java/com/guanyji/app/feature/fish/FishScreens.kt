@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -40,7 +41,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
@@ -49,15 +52,24 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import coil.request.ImageRequest
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.ScrollMoveMode
+import sh.calvin.reorderable.rememberReorderableLazyGridState
 import com.guanyji.app.R
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
+import com.guanyji.app.data.repository.applySavedOrder
+import com.guanyji.app.data.repository.mergeVisibleReorder
+import com.guanyji.app.data.repository.movedItem
 import com.guanyji.app.feature.overview.DashboardTokens
 import com.guanyji.app.ui.theme.AquariumCardTokens
 import com.guanyji.app.feature.overview.FishIcons
@@ -69,7 +81,7 @@ import java.util.Locale
 import java.util.UUID
 import kotlin.math.max
 import kotlin.math.min
-private enum class FishSort(val label: String) { added("最近添加"), tankDate("入缸日期"), measured("最近测量") }
+private enum class FishSort(val label: String) { added("最近添加"), tankDate("入缸日期"), measured("最近测量"), custom("自定义顺序") }
 private val statuses = listOf(null to "全部", FishStatus.active to "在养", FishStatus.quarantine to "隔离", FishStatus.transferred to "转出", FishStatus.deceased to "已故", FishStatus.archived to "归档")
 
 /**
@@ -85,28 +97,106 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
     var search by rememberSaveable { mutableStateOf("") }
     var tankId by rememberSaveable { mutableStateOf<String?>(null) }
     var status by rememberSaveable { mutableStateOf<FishStatus?>(null) }
-    var sort by rememberSaveable { mutableStateOf(FishSort.added) }
+    // 排序方式也落库：否则重启后回到「最近添加」，用户会以为拖拽白做了。
+    val savedSortName by vm.listSort.collectAsStateWithLifecycle()
+    var sortChoice by rememberSaveable { mutableStateOf<String?>(null) }
+    val sort = remember(sortChoice, savedSortName) {
+        FishSort.entries.firstOrNull { it.name == (sortChoice ?: savedSortName) } ?: FishSort.added
+    }
     var tankMenu by remember { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
+    // 自定义顺序：已落库的顺序 + 拖拽期间的本地覆盖。
+    // 拖拽库要求 onMove 内同步改列表，而落库是异步的，所以本地覆盖要撑到设置流追平为止。
+    val savedOrder by vm.listOrder.collectAsStateWithLifecycle()
+    var dragOrder by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(savedOrder, dragOrder) {
+        val pending = dragOrder
+        if (pending != null && pending == savedOrder) dragOrder = null
+    }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
     // 只做一次入场动画的鱼只，避免滚动回收后重复播放。
     val entranceShown = remember { mutableSetOf<String>() }
     val tankNames = tanks.associate { it.id to it.name }
-    val rows = data.orEmpty().filter { row ->
+    val filtered = data.orEmpty().filter { row ->
         (status == null || row.fish.status == status) && (tankId == null || row.fish.tankId == tankId) &&
             (row.fish.name.contains(search.trim(), true) || row.fish.species.orEmpty().contains(search.trim(), true))
-    }.let { rows -> when (sort) {
-        FishSort.added -> rows.sortedByDescending { it.fish.createdAt }
-        FishSort.tankDate -> rows.sortedByDescending { it.fish.addedAt }
-        FishSort.measured -> rows.sortedByDescending { it.lastMeasuredAt ?: Long.MIN_VALUE }
-    } }
+    }
+    // 自定义顺序的兜底就是「最近添加」：没排过的鱼只（含新增）永远追加在末尾。
+    val defaultOrder = remember(data) { data.orEmpty().sortedByDescending { it.fish.createdAt }.map { it.fish.id } }
+    val fullOrder = remember(defaultOrder, dragOrder, savedOrder) {
+        defaultOrder.applySavedOrder(dragOrder ?: savedOrder) { it }
+    }
+    val rows = when (sort) {
+        FishSort.added -> filtered.sortedByDescending { it.fish.createdAt }
+        FishSort.tankDate -> filtered.sortedByDescending { it.fish.addedAt }
+        FishSort.measured -> filtered.sortedByDescending { it.lastMeasuredAt ?: Long.MIN_VALUE }
+        FishSort.custom -> filtered.associateBy { it.fish.id }.let { byId -> fullOrder.mapNotNull(byId::get) }
+    }
+    val visibleIds = rows.map { it.fish.id }
+    // 搜索结果是临时视图，"改了哪一条"说不清，因此搜索状态下不开放拖拽。
+    val dragEnabled = search.isBlank()
+    val gridState = rememberLazyGridState()
+
+    fun selectSort(next: FishSort) {
+        if (next == sort) return
+        sortChoice = next.name
+        vm.saveListSort(next.name)
+    }
+
+    /** 切到自定义顺序时，沿用用户当前看到的顺序，列表不会跳动。 */
+    fun adoptVisibleOrder(): List<String> {
+        val seeded = mergeVisibleReorder(fullOrder, visibleIds)
+        dragOrder = seeded
+        if (sort != FishSort.custom) selectSort(FishSort.custom)
+        return seeded
+    }
+
+    fun moveDragged(fromKey: Any?, toKey: Any?) {
+        val fromId = fromKey as? String ?: return
+        val toId = toKey as? String ?: return
+        val from = visibleIds.indexOf(fromId)
+        val to = visibleIds.indexOf(toId)
+        if (from < 0 || to < 0) return
+        val base = if (sort == FishSort.custom) fullOrder else adoptVisibleOrder()
+        dragOrder = mergeVisibleReorder(base, visibleIds.movedItem(from, to))
+    }
+
+    fun persistOrder(ids: List<String>) {
+        vm.saveListOrder(ids) { message -> scope.launch { snackbar.showSnackbar(message) } }
+    }
+
+    /** 无障碍「上移 / 下移」：不依赖拖拽手势，TalkBack 用户也能改顺序。 */
+    fun moveByOne(id: String, delta: Int): Boolean {
+        val from = visibleIds.indexOf(id)
+        if (from < 0) return false
+        val to = (from + delta).coerceIn(0, visibleIds.lastIndex)
+        if (to == from) return false
+        val base = if (sort == FishSort.custom) fullOrder else adoptVisibleOrder()
+        val merged = mergeVisibleReorder(base, visibleIds.movedItem(from, to))
+        dragOrder = merged
+        persistOrder(merged)
+        return true
+    }
+
+    val reorderState = rememberReorderableLazyGridState(
+        lazyGridState = gridState,
+        scrollMoveMode = ScrollMoveMode.INSERT,
+        onMove = { from, to -> moveDragged(from.key, to.key) },
+    )
     val activeCount = data?.count { it.fish.status == FishStatus.active || it.fish.status == FishStatus.quarantine }
-    Scaffold(containerColor = DashboardTokens.PageBackground, contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
+    Scaffold(
+        containerColor = DashboardTokens.PageBackground,
+        snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Box(Modifier.testTag("fish-list-screen")) { FishListHeader(activeCount = activeCount, onAdd = onCreate) }
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 148.dp),
                 modifier = Modifier.fillMaxWidth().weight(1f),
-                state = androidx.compose.foundation.lazy.grid.rememberLazyGridState(),
+                state = gridState,
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
                 verticalArrangement = Arrangement.spacedBy(11.dp),
@@ -132,7 +222,7 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
                             }
                             Box {
                                 OutlinedButton(shape = FishCardTokens.FieldShape, onClick = { sortMenu = true }) { Text("排序：${sort.label}") }
-                                DropdownMenu(sortMenu, { sortMenu = false }) { FishSort.entries.forEach { item -> DropdownMenuItem(text = { Text(item.label) }, onClick = { sort = item; sortMenu = false }) } }
+                                DropdownMenu(sortMenu, { sortMenu = false }) { FishSort.entries.forEach { item -> DropdownMenuItem(text = { Text(item.label) }, onClick = { selectSort(item); sortMenu = false }) } }
                             }
                         }
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -154,17 +244,45 @@ fun FishListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, onEdit: (Stri
                     }
                 } else {
                     itemsIndexed(rows, key = { _, row -> row.fish.id }) { index, row ->
-                        val photo by remember(row.fish.coverPhotoId) { vm.photo(row.fish.coverPhotoId) }.collectAsStateWithLifecycle()
-                        val model = remember(row, tanks, lengthUnit) { fishCardModel(row, tanks, lengthUnit) }
-                        FishTradingCard(
-                            model = model,
-                            photo = photo,
-                            onClick = { onOpen(row.fish.id) },
-                            onEdit = { onEdit(row.fish.id) },
-                            animateEntrance = index < 8 && !entranceShown.contains(row.fish.id),
-                            onEntranceShown = { shown -> entranceShown.add(shown) },
-                            modifier = Modifier.animateItem(),
-                        )
+                        ReorderableItem(reorderState, key = row.fish.id) { isDragging ->
+                            val photo by remember(row.fish.coverPhotoId) { vm.photo(row.fish.coverPhotoId) }.collectAsStateWithLifecycle()
+                            val model = remember(row, tanks, lengthUnit) { fishCardModel(row, tanks, lengthUnit) }
+                            FishTradingCard(
+                                model = model,
+                                photo = photo,
+                                onClick = { onOpen(row.fish.id) },
+                                onEdit = { onEdit(row.fish.id) },
+                                animateEntrance = index < 8 && !entranceShown.contains(row.fish.id),
+                                onEntranceShown = { shown -> entranceShown.add(shown) },
+                                dragging = isDragging,
+                                dragHandleModifier = if (dragEnabled) {
+                                    Modifier.longPressDraggableHandle(
+                                        onDragStarted = {
+                                            val switched = sort != FishSort.custom
+                                            adoptVisibleOrder()
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            if (switched) {
+                                                scope.launch { snackbar.showSnackbar("已切换到「自定义顺序」，松手即保存") }
+                                            }
+                                        },
+                                        onDragStopped = {
+                                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            dragOrder?.let(::persistOrder)
+                                        },
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                                modifier = Modifier.semantics {
+                                    if (dragEnabled && rows.size > 1) {
+                                        customActions = listOf(
+                                            CustomAccessibilityAction("上移") { moveByOne(row.fish.id, -1) },
+                                            CustomAccessibilityAction("下移") { moveByOne(row.fish.id, 1) },
+                                        )
+                                    }
+                                },
+                            )
+                        }
                     }
                 }
             }

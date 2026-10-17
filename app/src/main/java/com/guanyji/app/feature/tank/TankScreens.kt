@@ -32,13 +32,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.guanyji.app.core.designsystem.*
 import com.guanyji.app.data.local.*
+import com.guanyji.app.data.repository.applySavedOrder
+import com.guanyji.app.data.repository.mergeVisibleReorder
+import com.guanyji.app.data.repository.movedItem
 import com.guanyji.app.data.repository.waterChangeTaskMarker
 import com.guanyji.app.feature.photo.ManagedCardPhoto
 import com.guanyji.app.feature.photo.ManagedPhotoImage
@@ -51,6 +59,10 @@ import com.guanyji.app.ui.theme.AquariumCardTokens
 import coil.compose.SubcomposeAsyncImage
 import coil.compose.SubcomposeAsyncImageContent
 import coil.request.ImageRequest
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.ScrollMoveMode
+import sh.calvin.reorderable.rememberReorderableLazyGridState
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -82,7 +94,17 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
     var search by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(TankFilter.all) }
     val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
-    val visible = tanks.filter { card ->
+    // 鱼缸页没有排序菜单：列表顺序本身就是用户拖出来的，未排过时回落到默认顺序（最近创建在前）。
+    val savedOrder by vm.listOrder.collectAsStateWithLifecycle()
+    var dragOrder by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(savedOrder, dragOrder) {
+        val pending = dragOrder
+        if (pending != null && pending == savedOrder) dragOrder = null
+    }
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val haptics = LocalHapticFeedback.current
+    val filtered = tanks.filter { card ->
         val query = search.trim()
         val typeLabel = if (card.type == TankType.freshwater) "淡水" else "海水"
         val matches = query.isEmpty() || card.name.contains(query, ignoreCase = true) || typeLabel.contains(query, ignoreCase = true)
@@ -93,7 +115,50 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
             TankFilter.archived -> card.status == TankStatus.archived
         }
     }
-    Scaffold(containerColor = Color(0xFFF2F8FC), contentWindowInsets = WindowInsets(0, 0, 0, 0)) { padding ->
+    val defaultOrder = remember(tanks) { tanks.map { it.id } }
+    val fullOrder = remember(defaultOrder, dragOrder, savedOrder) {
+        defaultOrder.applySavedOrder(dragOrder ?: savedOrder) { it }
+    }
+    val visible = filtered.associateBy { it.id }.let { byId -> fullOrder.mapNotNull(byId::get) }
+    val visibleIds = visible.map { it.id }
+    // 搜索是临时视图，搜索状态下不开放拖拽。
+    val dragEnabled = search.isBlank()
+
+    fun moveDragged(fromKey: Any?, toKey: Any?) {
+        val fromId = fromKey as? String ?: return
+        val toId = toKey as? String ?: return
+        val from = visibleIds.indexOf(fromId)
+        val to = visibleIds.indexOf(toId)
+        if (from < 0 || to < 0) return
+        dragOrder = mergeVisibleReorder(fullOrder, visibleIds.movedItem(from, to))
+    }
+
+    fun persistOrder(ids: List<String>) {
+        vm.saveListOrder(ids) { message -> scope.launch { snackbar.showSnackbar(message) } }
+    }
+
+    /** 无障碍「上移 / 下移」：不依赖拖拽手势。 */
+    fun moveByOne(id: String, delta: Int): Boolean {
+        val from = visibleIds.indexOf(id)
+        if (from < 0) return false
+        val to = (from + delta).coerceIn(0, visibleIds.lastIndex)
+        if (to == from) return false
+        val merged = mergeVisibleReorder(fullOrder, visibleIds.movedItem(from, to))
+        dragOrder = merged
+        persistOrder(merged)
+        return true
+    }
+
+    val reorderState = rememberReorderableLazyGridState(
+        lazyGridState = gridState,
+        scrollMoveMode = ScrollMoveMode.INSERT,
+        onMove = { from, to -> moveDragged(from.key, to.key) },
+    )
+    Scaffold(
+        containerColor = Color(0xFFF2F8FC),
+        snackbarHost = { SnackbarHost(snackbar) },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+    ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             Box(Modifier.testTag("tank-list-screen")) {
                 TankListHeader(tanks.count { it.status == TankStatus.active }, search, { search = it }, onCreate)
@@ -112,8 +177,34 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
                 }
             } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 158.dp), state = gridState, modifier = Modifier.weight(1f), contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 4.dp, bottom = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(visible, key = { it.id }) { card ->
-                    val photo by remember(card.photoId) { vm.photo(card.photoId) }.collectAsStateWithLifecycle()
-                    TankCard(card, photo, onClick = { onOpen(card.id) })
+                    ReorderableItem(reorderState, key = card.id) { isDragging ->
+                        val photo by remember(card.photoId) { vm.photo(card.photoId) }.collectAsStateWithLifecycle()
+                        TankCard(
+                            card,
+                            photo,
+                            onClick = { onOpen(card.id) },
+                            dragging = isDragging,
+                            dragHandleModifier = if (dragEnabled) {
+                                Modifier.longPressDraggableHandle(
+                                    onDragStarted = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) },
+                                    onDragStopped = {
+                                        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        dragOrder?.let(::persistOrder)
+                                    },
+                                )
+                            } else {
+                                Modifier
+                            },
+                            modifier = Modifier.semantics {
+                                if (dragEnabled && visible.size > 1) {
+                                    customActions = listOf(
+                                        CustomAccessibilityAction("上移") { moveByOne(card.id, -1) },
+                                        CustomAccessibilityAction("下移") { moveByOne(card.id, 1) },
+                                    )
+                                }
+                            },
+                        )
+                    }
                 }
                 if (filter != TankFilter.archived) item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { CareTip() }
             }
@@ -122,12 +213,21 @@ fun TankListScreen(onCreate: () -> Unit, onOpen: (String) -> Unit, vm: TankViewM
 }
 
 @Composable
-private fun TankCard(card: TankCardUiModel, photo: Photo?, onClick: () -> Unit) {
+private fun TankCard(
+    card: TankCardUiModel,
+    photo: Photo?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    dragging: Boolean = false,
+    dragHandleModifier: Modifier = Modifier,
+) {
     AquariumCardShell(
         accent = card.type.tankCardAccent(),
         onClick = onClick,
         onClickLabel = "查看${card.name}详情",
-        modifier = Modifier.testTag("tank-card-${card.id}"),
+        modifier = modifier.testTag("tank-card-${card.id}"),
+        lifted = dragging,
+        dragHandleModifier = dragHandleModifier,
         imageContent = { TankCardImage(card.type, photo) },
         overlayContent = {
             AquariumTypeBadge(

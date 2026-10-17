@@ -8,7 +8,10 @@ import androidx.lifecycle.viewModelScope
 import com.guanyji.app.data.local.*
 import com.guanyji.app.data.repository.LocalRepository
 import com.guanyji.app.core.time.dayBoundsFlow
+import com.guanyji.app.data.repository.TankOrderKey
+import com.guanyji.app.data.repository.encodeOrderIds
 import com.guanyji.app.data.repository.preferredTemperatureUnit
+import com.guanyji.app.data.repository.savedOrder
 import com.guanyji.app.data.photo.ManagedPhotoFileStore
 import com.guanyji.app.data.photo.PhotoRepository
 import kotlinx.coroutines.CancellationException
@@ -87,6 +90,22 @@ class TankViewModel(application: Application) : AndroidViewModel(application) {
     /** 错误态的重试入口：重建卡片数据流，让用户不必退出页面。 */
     fun retryCards() {
         cardRetry.update { it + 1 }
+    }
+
+    /** 「自定义顺序」的已保存顺序；存 app_settings，规则见 ListOrderPreferences。 */
+    val listOrder = repository.settings()
+        .map { rows -> rows.savedOrder(TankOrderKey) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 拖拽松手或无障上移/下移后落盘；顺序保存失败只提示，不影响列表状态。 */
+    fun saveListOrder(ids: List<String>, onError: (String) -> Unit = {}) = viewModelScope.launch {
+        try {
+            repository.saveSetting(AppSetting(TankOrderKey, encodeOrderIds(ids), System.currentTimeMillis()))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            onError(error.message ?: "顺序保存失败")
+        }
     }
 
     private val fishRetry = MutableStateFlow(0)

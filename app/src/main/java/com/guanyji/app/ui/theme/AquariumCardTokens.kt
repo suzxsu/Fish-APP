@@ -24,6 +24,14 @@ object AquariumCardColors {
     val Gold = Color(0xFFE4C27C)
     val Border = Color(0xFF9FD3F0)
     val ShadowTint = Color(0xFF0A2440)
+
+    // 立体光影：受光面高光、冷色反光与暗面。全部为低透明度叠加，
+    // 不使用真实模糊（RenderEffect 需 API 31，本项目 minSdk 26）。
+    val RimHighlight = Color(0xFFFFFFFF)
+    val RimHighlightSoft = Color(0xFFBFE9FF)
+    val RimShade = Color(0xFF04121F)
+    val DepthShadowDeep = Color(0xFF06121F)
+    val PanelInnerShade = Color(0xFF04121F)
     val ControlSurface = Color(0x4D0C2E4E)
     val ControlInk = Color(0xFFEAF4FB)
     val ReefFallbackTop = Color(0xFF0C3A63)
@@ -64,18 +72,21 @@ object AquariumCardColors {
 }
 
 object AquariumCardTokens {
-    val CardShape = RoundedCornerShape(16.dp)
+    /** 卡片主圆角；外缘描边与内斜面共用同一数值，避免两层弧线错位。 */
+    val CardCornerRadius = 16.dp
+    val CardShape = RoundedCornerShape(CardCornerRadius)
     val ChipShape = RoundedCornerShape(999.dp)
     val FieldShape = RoundedCornerShape(14.dp)
     /** 照片固定 4:3；整卡高度随信息面板内容自适应。 */
     const val ImageAspectRatio = 4f / 3f
-    val PanelTopDividerHeight = 1.dp
-    val PanelTopDividerStartAlpha = 0.9f
+    /** 照片与信息面板交界：0.5dp 金色细线，只作品牌细节，不能压过交界高光。 */
+    val PanelTopDividerHeight = 0.5.dp
+    val PanelTopDividerStartAlpha = 0.5f
     val PanelTopDividerEndAlpha = 0f
-    val CardBorderWidth = 1.2.dp
+    /** 外缘描边宽度：比纯色描边略粗，才能同时承载亮面与暗面两段渐变。 */
+    val CardBorderWidth = 1.35.dp
     val CardBorderColor = Color(0xFF9FD3F0)
     const val CardBorderMiddleAlpha = 0.55f
-    const val CardBorderEndAlpha = 0.78f
     val CardBodyInset = 8.dp
     val CardBodyBottomInset = 8.dp
     val CardTextRowSpacing = 2.dp
@@ -138,4 +149,75 @@ object AquariumCardTokens {
     val CardShadowElevation = 8.dp
     val CardPressedScale = 0.972f
     const val CardBorderIdleAlpha = 0.68f
+
+    // ---------- 卡片立体光影 ----------
+    // 依据 docs/产品设计/鱼缸卡片设计规范展示板.png 与设计文档 3.1「卡片立体规范」：
+    // 立体感来自「受光描边 + 内斜面 + 底部反光 + 层间阴影 + 外发光」，不做真实模糊。
+
+    /** 外缘描边受光渐变：左上亮白 → 中段主题色 → 右下压深，形成固定光源方向。 */
+    const val RimTopAlpha = 0.72f
+    const val RimAccentAlpha = 0.72f
+    const val RimBottomAlpha = 0.52f
+
+    /**
+     * 描边光晕：在 1.35dp 实线外侧再垫一圈低透明的宽描边，
+     * 让亮边像光透过玻璃渗出，而不是一条画上去的白线（无模糊可用的替代方案）。
+     */
+    val CardRimHaloWidth = 3.2.dp
+    const val CardRimHaloAlphaFactor = 0.28f
+
+    /** 顶部镜面反光：只在上边缘中段出现并两端淡出，避免整圈白线看起来像塑料描边。 */
+    const val CardTopGlintAlpha = 0.55f
+    const val CardTopGlintInsetFactor = 0.85f
+
+    /** 内斜面：模拟玻璃切面厚度，内缩一层是“卡片有厚度”的关键。 */
+    val CardInnerRimWidth = 1.dp
+    val CardInnerRimInset = 2.25.dp
+    const val InnerRimTopAlpha = 0.85f
+    const val InnerRimSoftAlpha = 0.30f
+    const val InnerRimBottomAlpha = 0.42f
+
+    /** 底部反光边：贴底一条淡蓝亮线，模拟玻璃底面折射。 */
+    val CardBottomReflectWidth = 0.9.dp
+    val CardBottomReflectInset = 1.6.dp
+    const val CardBottomReflectAlpha = 0.45f
+
+    /** 外发光：着色阴影需 API 28+，低版本由 cardOuterDepth 自动跳过该层。 */
+    val CardGlowElevation = 14.dp
+    const val CardGlowAmbientAlpha = 0.08f
+    const val CardGlowSpotAlpha = 0.15f
+
+    /** 接地投影：系统 elevation 只做极淡的环境压暗，具体悬浮感交给接触阴影。 */
+    val CardShadowElevationPressed = 2.dp
+    const val CardDepthAmbientAlpha = 0.34f
+    const val CardDepthSpotAlpha = 0.40f
+    const val CardDepthAnimationMillis = 160
+
+    /**
+     * 接触阴影：Android 的 elevation 阴影方向固定且很淡，撑不起“离开页面”的观感，
+     * 因此在卡片外侧自绘一圈向下偏移、向内加深的暗带（层叠描边模拟柔边）。
+     */
+    const val CardContactShadowLayers = 6
+    val CardContactShadowStep = 0.5.dp
+    val CardContactShadowOffset = 1.dp
+    const val CardContactShadowLayerAlpha = 0.036f
+
+    /** 按压 3D 倾斜：以底边为轴，正角度=顶边向后倾，符合“按下”的视觉预期。 */
+    const val CardPressTiltX = 3f
+    const val CardCameraDistance = 12f
+
+    /** 拖拽排序时"拿起卡片"：直立、放大、投影拉长，与按下的收紧形成对比。 */
+    const val CardLiftedScale = 1.045f
+    val CardShadowElevationLifted = 22.dp
+
+    /** 照片下沿暗带：让信息面板看起来“压在”照片上，形成 Z 轴分层。 */
+    val PhotoBottomShadeHeight = 18.dp
+    const val PhotoBottomShadeAlpha = 0.42f
+
+    /** 面板交界高光 + 面板顶部内阴影。 */
+    val PanelTopHairlineHeight = 1.dp
+    const val PanelTopHairlineAlpha = 0.55f
+    const val PanelTopHairlineAccentAlpha = 0.30f
+    val PanelInnerShadeHeight = 6.dp
+    const val PanelInnerShadeAlpha = 0.35f
 }

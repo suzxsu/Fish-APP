@@ -1,6 +1,7 @@
 package com.guanyji.app.core.designsystem
 
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -26,9 +27,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -50,18 +51,42 @@ fun AquariumCardShell(
     modifier: Modifier = Modifier,
     overlayContent: @Composable BoxScope.() -> Unit = {},
     imageAspectRatio: Float = AquariumCardTokens.ImageAspectRatio,
+    /** 长按拖拽排序期间置为 true：卡片"被拿起"，投影拉长、放大，并与按压倾斜互斥。 */
+    lifted: Boolean = false,
+    /** 拖拽手势修饰符，由列表页注入；放在 clickable 之后，短按仍进详情。 */
+    dragHandleModifier: Modifier = Modifier,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
-        targetValue = if (pressed) AquariumCardTokens.CardPressedScale else 1f,
+        targetValue = when {
+            lifted -> AquariumCardTokens.CardLiftedScale
+            pressed -> AquariumCardTokens.CardPressedScale
+            else -> 1f
+        },
         animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
         label = "aquariumCardPress",
     )
     val borderAlpha by animateFloatAsState(
-        targetValue = if (pressed) 1f else AquariumCardTokens.CardBorderIdleAlpha,
+        targetValue = if (pressed || lifted) 1f else AquariumCardTokens.CardBorderIdleAlpha,
         animationSpec = tween(durationMillis = 160),
         label = "aquariumCardBorder",
+    )
+    // 按压时卡片沿底边轻微后仰、投影收紧，形成“压下去”的立体反馈；
+    // 拖起时必须直立（抬起不是按下），否则会和"拿起卡片"的语义打架。
+    val pressTilt by animateFloatAsState(
+        targetValue = if (pressed && !lifted) AquariumCardTokens.CardPressTiltX else 0f,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "aquariumCardTilt",
+    )
+    val depthElevation by animateDpAsState(
+        targetValue = when {
+            lifted -> AquariumCardTokens.CardShadowElevationLifted
+            pressed -> AquariumCardTokens.CardShadowElevationPressed
+            else -> AquariumCardTokens.CardShadowElevation
+        },
+        animationSpec = tween(durationMillis = AquariumCardTokens.CardDepthAnimationMillis),
+        label = "aquariumCardElevation",
     )
     Box(
         modifier = modifier
@@ -69,41 +94,32 @@ fun AquariumCardShell(
             .graphicsLayer {
                 scaleX = pressScale
                 scaleY = pressScale
+                rotationX = pressTilt
+                transformOrigin = TransformOrigin(0.5f, 1f)
+                cameraDistance = AquariumCardTokens.CardCameraDistance * density
             }
-            .shadow(
-                elevation = AquariumCardTokens.CardShadowElevation,
-                shape = AquariumCardTokens.CardShape,
-                clip = false,
-                ambientColor = AquariumCardColors.ShadowTint,
-                spotColor = AquariumCardColors.ShadowTint,
-            )
+            .cardOuterDepth(accent = accent, elevation = depthElevation)
+            .cardContactShadow()
             .clip(AquariumCardTokens.CardShape)
             .background(Brush.verticalGradient(listOf(AquariumCardColors.CardTop, AquariumCardColors.CardBottom)))
-            .border(
-                width = AquariumCardTokens.CardBorderWidth,
-                brush = Brush.linearGradient(
-                    listOf(
-                        accent.copy(alpha = borderAlpha),
-                        AquariumCardTokens.CardBorderColor.copy(alpha = borderAlpha * AquariumCardTokens.CardBorderMiddleAlpha),
-                        accent.copy(alpha = borderAlpha * AquariumCardTokens.CardBorderEndAlpha),
-                    ),
-                ),
-                shape = AquariumCardTokens.CardShape,
-            )
+            // 描边、内斜面与底部反光都画在内容之上，这样亮边能压住照片边缘，形成玻璃厚度。
+            .cardEdgeLighting(accent = accent, borderAlpha = borderAlpha)
             .clickable(
                 interactionSource = interaction,
                 indication = null,
                 role = Role.Button,
                 onClickLabel = onClickLabel,
                 onClick = onClick,
-            ),
+            )
+            .then(dragHandleModifier),
     ) {
         Column(Modifier.fillMaxWidth()) {
             // 外层已按卡片圆角裁剪，图片区不再单独 clip，避免照片下沿出现圆角缺口。
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageAspectRatio),
+                    .aspectRatio(imageAspectRatio)
+                    .cardPhotoBottomShade(),
             ) {
                 imageContent()
                 overlayContent()
@@ -116,6 +132,7 @@ fun AquariumCardShell(
                             listOf(AquariumCardColors.PanelTop, AquariumCardColors.PanelBottom),
                         ),
                     )
+                    .cardPanelBevel(accent = accent),
             ) {
                 infoContent()
             }
