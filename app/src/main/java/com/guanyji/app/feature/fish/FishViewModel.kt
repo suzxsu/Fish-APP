@@ -8,7 +8,11 @@ import androidx.lifecycle.viewModelScope
 import com.guanyji.app.data.local.*
 import com.guanyji.app.data.photo.ManagedPhotoFileStore
 import com.guanyji.app.data.photo.PhotoRepository
+import com.guanyji.app.data.repository.DefaultLengthUnit
 import com.guanyji.app.data.repository.LocalRepository
+import com.guanyji.app.data.repository.preferredLengthUnit
+import com.guanyji.app.core.time.dayBoundsFlow
+import com.guanyji.app.core.time.deviceDayBounds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.Flow
@@ -20,8 +24,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
 
 sealed interface FishLoadState<out T> {
     data object Loading : FishLoadState<Nothing>
@@ -59,13 +61,18 @@ class FishViewModel(application: Application) : AndroidViewModel(application) {
     private val database = DatabaseFactory.create(application)
     private val repository = LocalRepository(database)
     val photoRepository = PhotoRepository(database, ManagedPhotoFileStore(application))
-    private fun dayBounds(): Pair<Long, Long> {
-        val start = Instant.ofEpochMilli(System.currentTimeMillis()).atZone(ZoneId.systemDefault()).toLocalDate().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val end = Instant.ofEpochMilli(start).atZone(ZoneId.systemDefault()).toLocalDate().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        return start to end
-    }
-    val fish = dayBounds().let { (start, end) -> repository.allFish(start, end) }.map<List<FishSummary>, List<FishSummary>?> { it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    private fun dayBounds(): Pair<Long, Long> = deviceDayBounds()
+
+    /** 鱼只列表的「今日喂食」取自然日统计，跨零点后需要跟着换边界。 */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val fish = dayBoundsFlow()
+        .flatMapLatest { (start, end) -> repository.allFish(start, end) }
+        .map<List<FishSummary>, List<FishSummary>?> { it }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     val tanks = repository.allTanks().map<List<Tank>, List<Tank>?> { it }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val lengthUnit = repository.settings()
+        .map(::preferredLengthUnit)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), DefaultLengthUnit)
     fun summary(id: String) = dayBounds().let { (start, end) -> repository.fishSummary(id, start, end) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
     fun detailState(id: String) = dayBounds().let { (start, end) -> repository.fishSummary(id, start, end) }
         .map<FishSummary?, FishLoadState<FishSummary>> { fishLoadState(it) }

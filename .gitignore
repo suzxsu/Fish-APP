@@ -3,3 +3,7 @@
 .kotlin/
 **/build/
 local.properties
+# 工具/代理产物，不属于项目源码
+.dsh-vision-router/
+# 本地构建日志
+build-debug.log

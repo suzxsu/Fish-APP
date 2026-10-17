@@ -109,11 +109,15 @@ data class FeedingEventWithTargets(
     @androidx.room.Relation(parentColumn = "id", entityColumn = "feedingEventId") val targets: List<FeedingTarget>,
 )
 
+data class TankFeedingCount(val tankId: String, val feedingCount: Int)
+
 @Dao
 interface FeedingDao {
     @Transaction
     @Query("SELECT * FROM feeding_events ORDER BY fedAt")
     fun observeAll(): Flow<List<FeedingEventWithTargets>>
+    @Query("SELECT tankId AS tankId, COUNT(DISTINCT eventId) AS feedingCount FROM (SELECT id AS eventId, tankId AS tankId FROM feeding_events WHERE tankId IS NOT NULL AND fedAt >= :dayStart AND fedAt < :dayEnd UNION ALL SELECT feeding_events.id AS eventId, fish.tankId AS tankId FROM feeding_events JOIN feeding_targets ON feeding_targets.feedingEventId = feeding_events.id JOIN fish ON fish.id = feeding_targets.fishId WHERE feeding_events.tankId IS NULL AND feeding_events.fedAt >= :dayStart AND feeding_events.fedAt < :dayEnd) GROUP BY tankId")
+    fun observeFeedingCountsByTank(dayStart: Long, dayEnd: Long): Flow<List<TankFeedingCount>>
     @Transaction
     @Query("SELECT * FROM feeding_events WHERE tankId = :tankId ORDER BY fedAt DESC")
     fun observeForTank(tankId: String): Flow<List<FeedingEventWithTargets>>
@@ -147,6 +151,9 @@ interface WaterTestDao {
     @Transaction
     @Query("SELECT * FROM water_tests ORDER BY measuredAt")
     fun observeAll(): Flow<List<WaterTestWithValues>>
+    @Transaction
+    @Query("SELECT water_tests.* FROM water_tests WHERE water_tests.id = (SELECT latest.id FROM water_tests latest WHERE latest.tankId = water_tests.tankId ORDER BY latest.measuredAt DESC, latest.id DESC LIMIT 1) ORDER BY water_tests.measuredAt DESC")
+    fun observeLatestByTank(): Flow<List<WaterTestWithValues>>
     @Transaction
     @Query("SELECT * FROM water_tests WHERE tankId = :tankId ORDER BY measuredAt DESC")
     fun observeForTank(tankId: String): Flow<List<WaterTestWithValues>>
